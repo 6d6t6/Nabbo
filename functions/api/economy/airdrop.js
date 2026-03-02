@@ -87,14 +87,11 @@ function makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey, balance, cr
 }
 
 function makeClaimMarkerEvent({ tools, issuerSk, issuerPubkey, toPubkey, amount, createdAt }) {
-  const day = startOfUtcDay(createdAt)
-  const claimId = `claim:${day}:${toPubkey}`
   const contentObj = {
     type: "nabbo_econ_daily_claim",
     pubkey: toPubkey,
     amount,
-    ts: createdAt,
-    day
+    ts: createdAt
   }
 
   const eventTemplate = {
@@ -104,7 +101,6 @@ function makeClaimMarkerEvent({ tools, issuerSk, issuerPubkey, toPubkey, amount,
       ["t", "nabbo-econ"],
       ["t", "nabbo-claim"],
       ["p", toPubkey],
-      ["d", claimId],
       ["issuer", issuerPubkey]
     ],
     content: JSON.stringify(contentObj),
@@ -160,22 +156,6 @@ export async function onRequestPost({ request, env }) {
 
   const mkPool = () => new tools.SimplePool({ getTimeout: 1800, eoseSubTimeout: 1800 })
 
-  const publishAtLeastOne = async ({ pool, relays, event, timeoutMs }) => {
-    const pubs = pool.publish(relays, event)
-    let t
-    try {
-      await Promise.race([
-        Promise.any(pubs),
-        new Promise((_, rej) => {
-          t = setTimeout(() => rej(new Error("timeout")), timeoutMs)
-        })
-      ])
-      return true
-    } finally {
-      if (t) clearTimeout(t)
-    }
-  }
-
   const withTimeout = async (p, ms) => {
     let t
     try {
@@ -194,32 +174,16 @@ export async function onRequestPost({ request, env }) {
   try {
     const pool = mkPool()
     const since = startOfUtcDay(createdAt)
-    const claimId = `claim:${since}:${auth.pubkey}`
-    let existing = await withTimeout(
+    const existing = await withTimeout(
       pool.get(relays, {
-        kinds: [1],
-        authors: [issuerPubkey],
-        "#t": ["nabbo-claim"],
-        "#p": [auth.pubkey],
-        "#d": [claimId],
-        since
+      kinds: [1],
+      authors: [issuerPubkey],
+      "#t": ["nabbo-claim"],
+      "#p": [auth.pubkey],
+      since
       }),
       2200
     )
-
-    // Back-compat: older claim marker events (before claimId) won't have the d tag.
-    if (!existing) {
-      existing = await withTimeout(
-        pool.get(relays, {
-          kinds: [1],
-          authors: [issuerPubkey],
-          "#t": ["nabbo-claim"],
-          "#p": [auth.pubkey],
-          since
-        }),
-        2200
-      )
-    }
 
     if (existing) {
       return json(429, {
@@ -275,15 +239,57 @@ export async function onRequestPost({ request, env }) {
   try {
     claimMarker = makeClaimMarkerEvent({ tools, issuerSk, issuerPubkey, toPubkey: auth.pubkey, amount: dailyAmount, createdAt })
   } catch {
-    return bad(500, "failed to sign claim")
+    return bad(500, "failed to sign")
   }
 
+  let claimPublishOk = 0
+  let claimPublishFail = 0
+  let balancePublishOk = 0
+  let balancePublishFail = 0
   try {
     const pool = mkPool()
-    await publishAtLeastOne({ pool, relays, event: claimMarker, timeoutMs: 2500 })
-    await publishAtLeastOne({ pool, relays, event: signed, timeoutMs: 2500 })
+    const claimPubs = pool.publish(relays, claimMarker)
+    const balancePubs = pool.publish(relays, signed)
+
+    let claimResults
+    try {
+      claimResults = await withTimeout(Promise.allSettled(claimPubs), 2500)
+    } catch {
+      claimResults = null
+    }
+
+    if (Array.isArray(claimResults)) {
+      for (const r of claimResults) {
+        if (r.status === "fulfilled") claimPublishOk += 1
+        else claimPublishFail += 1
+      }
+    } else {
+      claimPublishFail = claimPubs.length
+    }
+
+    // Fail closed: if the claim marker can't be published anywhere, we must not mint coins.
+    if (claimPublishOk <= 0) {
+      return bad(503, "claim marker publish failed")
+    }
+
+    let balanceResults
+    try {
+      balanceResults = await withTimeout(Promise.allSettled(balancePubs), 2500)
+    } catch {
+      balanceResults = null
+    }
+
+    if (Array.isArray(balanceResults)) {
+      for (const r of balanceResults) {
+        if (r.status === "fulfilled") balancePublishOk += 1
+        else balancePublishFail += 1
+      }
+    } else {
+      balancePublishFail = balancePubs.length
+    }
   } catch {
-    return bad(503, "failed to publish claim")
+    claimPublishFail = relays.length
+    balancePublishFail = relays.length
   }
 
   return json(200, {
@@ -291,6 +297,10 @@ export async function onRequestPost({ request, env }) {
     claim: claimMarker,
     event: signed,
     relays,
+    publish: {
+      claim: { ok: claimPublishOk, fail: claimPublishFail },
+      balance: { ok: balancePublishOk, fail: balancePublishFail }
+    },
     balance: { before: currentBalance, after: newBalance, delta: dailyAmount },
     nextClaimAt: endOfUtcDay(createdAt)
   })
