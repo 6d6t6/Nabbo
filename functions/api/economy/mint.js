@@ -17,8 +17,8 @@ function bad(status, message) {
 function requireTools() {
   const tools = globalThis.NostrTools
   if (!tools) throw new Error("NostrTools not available")
-  const { finishEvent, getPublicKey, SimplePool, nip98 } = tools
-  if (!finishEvent || !getPublicKey || !SimplePool || !nip98) throw new Error("NostrTools missing finishEvent/getPublicKey/SimplePool/nip98")
+  const { finishEvent, getPublicKey, SimplePool, nip98, verifySignature } = tools
+  if (!finishEvent || !getPublicKey || !SimplePool || !nip98 || !verifySignature) throw new Error("NostrTools missing finishEvent/getPublicKey/SimplePool/nip98/verifySignature")
   return tools
 }
 
@@ -50,6 +50,60 @@ function randomHex(bytesLen) {
   return Array.from(b)
     .map((x) => x.toString(16).padStart(2, "0"))
     .join("")
+}
+
+const PRICES = {
+  chair_basic: 10,
+  table_basic: 25,
+  plant_basic: 15
+}
+
+function getPrice(defId) {
+  const p = PRICES[String(defId || "")]
+  return typeof p === "number" && isFinite(p) && p >= 0 ? p : null
+}
+
+function parseBalanceFromEvent(ev) {
+  if (!ev || typeof ev !== "object") return null
+  if (ev.kind !== 30078) return null
+  if (!Array.isArray(ev.tags)) return null
+  const d = ev.tags.find((t) => t?.[0] === "d")?.[1]
+  if (d !== "coins") return null
+  let obj
+  try {
+    obj = JSON.parse(ev.content || "{}")
+  } catch {
+    return null
+  }
+  if (obj?.type !== "nabbo_econ_balance") return null
+  if (typeof obj.balance !== "number") return null
+  if (!obj.pubkey || typeof obj.pubkey !== "string") return null
+  return { pubkey: obj.pubkey, balance: obj.balance }
+}
+
+function makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey, balance, createdAt }) {
+  const contentObj = {
+    type: "nabbo_econ_balance",
+    pubkey: toPubkey,
+    balance,
+    ts: createdAt
+  }
+
+  const eventTemplate = {
+    kind: 30078,
+    created_at: createdAt,
+    tags: [
+      ["t", "nabbo-econ"],
+      ["t", "nabbo-coins"],
+      ["p", toPubkey],
+      ["d", "coins"],
+      ["issuer", issuerPubkey]
+    ],
+    content: JSON.stringify(contentObj),
+    pubkey: issuerPubkey
+  }
+
+  return tools.finishEvent(eventTemplate, issuerSk)
 }
 
 async function requireAuthPubkey({ request, tools }) {
@@ -84,9 +138,13 @@ export async function onRequestPost({ request, env }) {
 
   const toPubkey = (body?.toPubkey || "").trim()
   const defId = (body?.defId || "").trim()
+  const balanceEvent = body?.balanceEvent
 
   if (!/^[0-9a-f]{64}$/i.test(toPubkey)) return bad(400, "invalid toPubkey")
   if (!defId) return bad(400, "missing defId")
+
+  const price = getPrice(defId)
+  if (price === null) return bad(400, "unknown item")
 
   if (toPubkey.toLowerCase() !== auth.pubkey.toLowerCase()) {
     return bad(403, "toPubkey must match authenticated pubkey")
@@ -99,11 +157,27 @@ export async function onRequestPost({ request, env }) {
   const createdAt = Math.floor(Date.now() / 1000)
   const issuerPubkey = tools.getPublicKey(issuerSk)
 
+  if (!balanceEvent || typeof balanceEvent !== "object") {
+    return bad(400, "missing balanceEvent")
+  }
+
+  const parsedBal = parseBalanceFromEvent(balanceEvent)
+  if (!parsedBal) return bad(400, "invalid balanceEvent")
+  if (parsedBal.pubkey.toLowerCase() !== toPubkey.toLowerCase()) return bad(400, "balanceEvent pubkey mismatch")
+  if (String(balanceEvent.pubkey || "").toLowerCase() !== issuerPubkey.toLowerCase()) return bad(400, "balanceEvent issuer mismatch")
+  if (!tools.verifySignature(balanceEvent)) return bad(400, "balanceEvent signature invalid")
+
+  const currentBalance = parsedBal.balance
+  if (!Number.isFinite(currentBalance) || currentBalance < 0) return bad(400, "invalid balance")
+  if (currentBalance < price) return bad(402, "insufficient coins")
+  const newBalance = currentBalance - price
+
   const contentObj = {
     type: "nabbo_econ_mint",
     instanceId,
     defId,
     toPubkey,
+    price,
     ts: createdAt
   }
 
@@ -130,12 +204,19 @@ export async function onRequestPost({ request, env }) {
     return bad(500, "failed to sign")
   }
 
+  let balanceSigned
+  try {
+    balanceSigned = makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey, balance: newBalance, createdAt })
+  } catch {
+    return bad(500, "failed to sign balance")
+  }
+
   const relays = getRelays(env)
   let publishOk = 0
   let publishFail = 0
   try {
     const pool = new tools.SimplePool()
-    const pubs = pool.publish(relays, signed)
+    const pubs = [...pool.publish(relays, signed), ...pool.publish(relays, balanceSigned)]
     const results = await Promise.allSettled(pubs)
     for (const r of results) {
       if (r.status === "fulfilled") publishOk += 1
@@ -145,5 +226,12 @@ export async function onRequestPost({ request, env }) {
     publishFail = relays.length
   }
 
-  return json(null, 200, { ok: true, event: signed, relays, publish: { ok: publishOk, fail: publishFail } })
+  return json(null, 200, {
+    ok: true,
+    event: signed,
+    balanceEvent: balanceSigned,
+    relays,
+    publish: { ok: publishOk, fail: publishFail },
+    balance: { before: currentBalance, after: newBalance, price }
+  })
 }

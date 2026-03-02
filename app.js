@@ -13,6 +13,55 @@ let currentFloorPlan = null
 
 let avatars = {}
 
+function renderCoins() {
+  if (!coinBalanceEl) return
+  if (typeof coinsBalance === "number" && Number.isFinite(coinsBalance)) {
+    coinBalanceEl.textContent = `Coins: ${coinsBalance}`
+  } else {
+    coinBalanceEl.textContent = "Coins: …"
+  }
+}
+
+function stopCoinsSub() {
+  try {
+    coinsSub?.unsub?.()
+  } catch {}
+  coinsSub = null
+}
+
+function refreshCoins() {
+  if (!myPubkey) return
+  stopCoinsSub()
+  coinsBalance = null
+  latestBalanceEvent = null
+  renderCoins()
+  renderCatalog()
+
+  coinsSub = subscribe(
+    {
+      kinds: [30078],
+      "#t": ["nabbo-coins"],
+      "#p": [myPubkey]
+    },
+    (ev) => {
+      let obj
+      try {
+        obj = JSON.parse(ev?.content || "{}")
+      } catch {
+        return
+      }
+      if (obj?.type !== "nabbo_econ_balance") return
+      if (String(obj.pubkey || "").toLowerCase() !== myPubkey.toLowerCase()) return
+      if (typeof obj.balance !== "number" || !Number.isFinite(obj.balance) || obj.balance < 0) return
+
+      coinsBalance = obj.balance
+      latestBalanceEvent = ev
+      renderCoins()
+      renderCatalog()
+    }
+  )
+}
+
 function renderCatalog() {
   if (!catalogEl) return
   catalogEl.innerHTML = ""
@@ -29,8 +78,18 @@ function renderCatalog() {
     btn.className = "primary"
     btn.textContent = "Buy"
     btn.type = "button"
+    const price = Number(it.price || 0)
+    if (typeof coinsBalance === "number" && Number.isFinite(coinsBalance)) {
+      btn.disabled = coinsBalance < price
+    } else {
+      btn.disabled = true
+    }
     btn.onclick = async () => {
       try {
+        if (!latestBalanceEvent) {
+          appendChatLine("no coin balance yet - claim coins first")
+          return
+        }
         const url = new URL("/api/economy/mint", window.location.origin).toString()
         const auth = await getNip98AuthHeader(url, "POST")
         const res = await fetch(url, {
@@ -39,12 +98,23 @@ function renderCatalog() {
             "content-type": "application/json",
             Authorization: auth
           },
-          body: JSON.stringify({ defId: it.defId, toPubkey: myPubkey })
+          body: JSON.stringify({ defId: it.defId, toPubkey: myPubkey, balanceEvent: latestBalanceEvent })
         })
         const out = await res.json().catch(() => null)
         if (!out?.ok) {
           appendChatLine(`mint failed: ${out?.error || res.status}`)
           return
+        }
+        if (out?.balanceEvent) {
+          latestBalanceEvent = out.balanceEvent
+          try {
+            const obj = JSON.parse(out.balanceEvent.content || "{}")
+            if (typeof obj.balance === "number") {
+              coinsBalance = obj.balance
+              renderCoins()
+              renderCatalog()
+            }
+          } catch {}
         }
         appendChatLine(`bought: ${it.name}`)
         await new Promise((r) => setTimeout(r, 600))
@@ -308,6 +378,8 @@ const inventoryEl = document.getElementById("inventory")
 const catalogEl = document.getElementById("catalog")
 const inventoryListEl = document.getElementById("inventoryList")
 const inventoryRefreshEl = document.getElementById("inventoryRefresh")
+const coinBalanceEl = document.getElementById("coinBalance")
+const claimCoinsEl = document.getElementById("claimCoins")
 const profileEl = document.getElementById("profile")
 const profileNameEl = document.getElementById("profileName")
 const profileSaveEl = document.getElementById("profileSave")
@@ -332,6 +404,10 @@ const catalog = [
 const inventoryItems = new Map()
 let inventorySub = null
 let selectedInstanceId = ""
+
+let coinsSub = null
+let coinsBalance = null
+let latestBalanceEvent = null
 
 const placedItems = new Map()
 let placedGroup = null
@@ -1439,9 +1515,38 @@ async function init() {
 
   renderCatalog()
   refreshInventory()
+  refreshCoins()
+
+  if (claimCoinsEl) {
+    claimCoinsEl.onclick = async () => {
+      try {
+        const url = new URL("/api/economy/airdrop", window.location.origin).toString()
+        const auth = await getNip98AuthHeader(url, "POST")
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: auth
+          }
+        })
+        const out = await res.json().catch(() => null)
+        if (!out?.ok) {
+          appendChatLine(`claim failed: ${out?.error || res.status}`)
+          return
+        }
+        appendChatLine("claimed coins")
+        await new Promise((r) => setTimeout(r, 600))
+        refreshCoins()
+      } catch {
+        appendChatLine("claim failed")
+      }
+    }
+  }
 
   if (inventoryRefreshEl) {
-    inventoryRefreshEl.onclick = () => refreshInventory()
+    inventoryRefreshEl.onclick = () => {
+      refreshInventory()
+      refreshCoins()
+    }
   }
 
   setInRoom(false)
