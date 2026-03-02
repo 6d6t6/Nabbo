@@ -82,6 +82,11 @@ export function subscribe(filters, onEvent) {
   return sub
 }
 
+export async function list(filters) {
+  const events = await pool.list(relays, [filters], {})
+  return events
+}
+
 export function getPubkey() {
   return pk
 }

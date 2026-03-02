@@ -1,5 +1,5 @@
 import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js'
-import { initNostr, publish, subscribe, getPubkey, getNip98AuthHeader } from "./nostr.js"
+import { initNostr, publish, subscribe, list, getPubkey, getNip98AuthHeader } from "./nostr.js"
 import { createRoom } from './room.js'
 import { createAvatar, updateAvatarPosition } from './avatar.js'
 import { NabboNet, createRoomId, roomIdToCode } from "./webrtc.js"
@@ -316,6 +316,71 @@ function placeItemLocal(item) {
 
   placedItems.set(item.instanceId, { ...item, mesh })
   renderInventory()
+
+  if (currentRoom?.isHost && !loadingRoomState) {
+    scheduleSaveRoomFurni()
+  }
+}
+
+function getRoomStateTags(roomId) {
+  return [
+    ["t", "nabbo-room"],
+    ["t", "nabbo-room-state"],
+    ["d", String(roomId)],
+    ["room", String(roomId)]
+  ]
+}
+
+function scheduleSaveRoomFurni() {
+  if (!currentRoom?.isHost || !currentRoom?.roomId) return
+  if (furniSaveTimer) {
+    clearTimeout(furniSaveTimer)
+  }
+  furniSaveTimer = setTimeout(() => {
+    furniSaveTimer = null
+    saveRoomFurni().catch(() => {})
+  }, 800)
+}
+
+async function saveRoomFurni() {
+  if (!currentRoom?.isHost || !currentRoom?.roomId) return
+  const roomId = currentRoom.roomId
+  const items = Array.from(placedItems.values()).map((it) => ({
+    instanceId: it.instanceId,
+    defId: it.defId,
+    tile: it.tile
+  }))
+  const contentObj = {
+    type: "nabbo_room_state",
+    roomId,
+    items,
+    ts: Math.floor(Date.now() / 1000)
+  }
+  await publish(30078, JSON.stringify(contentObj), getRoomStateTags(roomId))
+}
+
+async function loadRoomFurni(roomId) {
+  const evs = await list({
+    kinds: [30078],
+    "#t": ["nabbo-room-state"],
+    "#d": [String(roomId)],
+    limit: 10
+  })
+  const sorted = (evs || []).slice().sort((a, b) => (b?.created_at || 0) - (a?.created_at || 0))
+  const ev = sorted[0]
+  if (!ev) return []
+  let obj
+  try {
+    obj = JSON.parse(ev.content || "{}")
+  } catch {
+    return []
+  }
+  if (obj?.type !== "nabbo_room_state") return []
+  if (String(obj.roomId || "") !== String(roomId)) return []
+  if (!Array.isArray(obj.items)) return []
+  return obj.items
+    .filter((it) => it?.instanceId && it?.defId && it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number")
+    .map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile }))
 }
 
 const win = createWindowManager({ initialZ: 50, bottomMargin: 70 })
@@ -335,6 +400,9 @@ let publicRooms = null
 
 let currentRoom = null
 let net = null
+
+let furniSaveTimer = null
+let loadingRoomState = false
 
 let suppressDisconnectUntil = 0
 
@@ -1395,6 +1463,20 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
     currentFloorPlan = effectivePlan
   }
 
+  if (isHost && roomId) {
+    try {
+      loadingRoomState = true
+      const items = await loadRoomFurni(roomId)
+      for (const it of items) {
+        placeItemLocal(it)
+      }
+    } catch {
+      // ignore restore failures
+    } finally {
+      loadingRoomState = false
+    }
+  }
+
   myAvatar = ensureAvatar(myPubkey)
   const startPos = snapToTileCenter(getSpawnPos())
   updateAvatarPosition(myAvatar, startPos)
@@ -1536,10 +1618,27 @@ async function init() {
         })
         const out = await res.json().catch(() => null)
         if (!out?.ok) {
-          appendChatLine(`claim failed: ${out?.error || res.status}`)
+          const msg = out?.error || res.status
+          appendChatLine(`claim failed: ${msg}`)
           return
         }
-        appendChatLine("daily claim ok")
+        if (out?.event) {
+          latestBalanceEvent = out.event
+          try {
+            const obj = JSON.parse(out.event.content || "{}")
+            if (typeof obj.balance === "number") {
+              coinsBalance = obj.balance
+              renderCoins()
+              renderCatalog()
+            }
+          } catch {}
+        }
+
+        if (out?.balance?.delta) {
+          appendChatLine(`daily claim +${out.balance.delta}`)
+        } else {
+          appendChatLine("daily claim ok")
+        }
         await new Promise((r) => setTimeout(r, 600))
         refreshCoins()
       } catch {

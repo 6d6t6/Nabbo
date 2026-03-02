@@ -75,9 +75,32 @@ function makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey, balance, cr
     tags: [
       ["t", "nabbo-econ"],
       ["t", "nabbo-coins"],
-      ["op", "airdrop"],
       ["p", toPubkey],
       ["d", "coins"],
+      ["issuer", issuerPubkey]
+    ],
+    content: JSON.stringify(contentObj),
+    pubkey: issuerPubkey
+  }
+
+  return tools.finishEvent(eventTemplate, issuerSk)
+}
+
+function makeClaimMarkerEvent({ tools, issuerSk, issuerPubkey, toPubkey, amount, createdAt }) {
+  const contentObj = {
+    type: "nabbo_econ_daily_claim",
+    pubkey: toPubkey,
+    amount,
+    ts: createdAt
+  }
+
+  const eventTemplate = {
+    kind: 1,
+    created_at: createdAt,
+    tags: [
+      ["t", "nabbo-econ"],
+      ["t", "nabbo-claim"],
+      ["p", toPubkey],
       ["issuer", issuerPubkey]
     ],
     content: JSON.stringify(contentObj),
@@ -99,6 +122,24 @@ function endOfUtcDay(tsSeconds) {
   return start + 24 * 60 * 60
 }
 
+function parseBalanceFromEvent(ev) {
+  if (!ev || typeof ev !== "object") return null
+  if (ev.kind !== 30078) return null
+  if (!Array.isArray(ev.tags)) return null
+  const d = ev.tags.find((t) => t?.[0] === "d")?.[1]
+  if (d !== "coins") return null
+  let obj
+  try {
+    obj = JSON.parse(ev.content || "{}")
+  } catch {
+    return null
+  }
+  if (obj?.type !== "nabbo_econ_balance") return null
+  if (typeof obj.balance !== "number" || !Number.isFinite(obj.balance) || obj.balance < 0) return null
+  if (!obj.pubkey || typeof obj.pubkey !== "string") return null
+  return { pubkey: obj.pubkey, balance: obj.balance }
+}
+
 export async function onRequestPost({ request, env }) {
   const tools = requireTools()
 
@@ -118,11 +159,10 @@ export async function onRequestPost({ request, env }) {
     const pool = new tools.SimplePool()
     const since = startOfUtcDay(createdAt)
     const existing = await pool.get(relays, {
-      kinds: [30078],
+      kinds: [1],
       authors: [issuerPubkey],
+      "#t": ["nabbo-claim"],
       "#p": [auth.pubkey],
-      "#d": ["coins"],
-      "#op": ["airdrop"],
       since
     })
 
@@ -139,11 +179,43 @@ export async function onRequestPost({ request, env }) {
   }
 
   // Stateless + free: airdrop sets your balance to a fixed starter amount.
-  const starter = 100
+  const dailyAmount = 100
+
+  let currentBalance = 0
+  try {
+    const pool = new tools.SimplePool()
+    const evs = await pool.list(relays, [
+      {
+        kinds: [30078],
+        authors: [issuerPubkey],
+        "#t": ["nabbo-coins"],
+        "#p": [auth.pubkey],
+        "#d": ["coins"],
+        limit: 10
+      }
+    ])
+    const sorted = (evs || []).slice().sort((a, b) => (b?.created_at || 0) - (a?.created_at || 0))
+    const parsed = parseBalanceFromEvent(sorted[0])
+    if (parsed && String(parsed.pubkey || "").toLowerCase() === auth.pubkey.toLowerCase()) {
+      currentBalance = parsed.balance
+    }
+  } catch {
+    // If we can't read current balance we must fail closed.
+    return bad(503, "relays unavailable")
+  }
+
+  const newBalance = currentBalance + dailyAmount
 
   let signed
   try {
-    signed = makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey: auth.pubkey, balance: starter, createdAt })
+    signed = makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey: auth.pubkey, balance: newBalance, createdAt })
+  } catch {
+    return bad(500, "failed to sign")
+  }
+
+  let claimMarker
+  try {
+    claimMarker = makeClaimMarkerEvent({ tools, issuerSk, issuerPubkey, toPubkey: auth.pubkey, amount: dailyAmount, createdAt })
   } catch {
     return bad(500, "failed to sign")
   }
@@ -152,7 +224,7 @@ export async function onRequestPost({ request, env }) {
   let publishFail = 0
   try {
     const pool = new tools.SimplePool()
-    const pubs = pool.publish(relays, signed)
+    const pubs = [...pool.publish(relays, claimMarker), ...pool.publish(relays, signed)]
     const results = await Promise.allSettled(pubs)
     for (const r of results) {
       if (r.status === "fulfilled") publishOk += 1
@@ -164,9 +236,11 @@ export async function onRequestPost({ request, env }) {
 
   return json(200, {
     ok: true,
+    claim: claimMarker,
     event: signed,
     relays,
     publish: { ok: publishOk, fail: publishFail },
+    balance: { before: currentBalance, after: newBalance, delta: dailyAmount },
     nextClaimAt: endOfUtcDay(createdAt)
   })
 }
