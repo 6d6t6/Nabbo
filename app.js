@@ -11,6 +11,9 @@ let scene, camera, renderer
 let floor
 let currentFloorPlan = null
 
+let raycaster
+let mouse
+
 let avatars = {}
 
  let issuerPubkey = ""
@@ -420,11 +423,79 @@ function colorFromString(s) {
 }
 
 function createFurniMesh(defId) {
-  const geom = new THREE.BoxGeometry(0.86, 0.6, 0.86)
-  const mat = new THREE.MeshBasicMaterial({ color: colorFromString(defId || "furni") })
-  const mesh = new THREE.Mesh(geom, mat)
-  mesh.position.y = 0.31
-  return mesh
+  const baseColor = colorFromString(defId || "furni")
+  const group = new THREE.Group()
+
+  const makeMat = (c) => new THREE.MeshBasicMaterial({ color: c })
+
+  if (defId === "chair_basic") {
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.14, 0.82), makeMat(baseColor))
+    seat.position.y = 0.32
+    group.add(seat)
+
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.52, 0.12), makeMat((baseColor + 0x202020) & 0xffffff))
+    back.position.y = 0.58
+    back.position.z = -0.35
+    group.add(back)
+
+    const legGeom = new THREE.BoxGeometry(0.12, 0.32, 0.12)
+    const legMat = makeMat((baseColor + 0x101010) & 0xffffff)
+    const leg = (x, z) => {
+      const m = new THREE.Mesh(legGeom, legMat)
+      m.position.set(x, 0.16, z)
+      group.add(m)
+    }
+    leg(0.32, 0.32)
+    leg(-0.32, 0.32)
+    leg(0.32, -0.32)
+    leg(-0.32, -0.32)
+  } else if (defId === "table_basic") {
+    const top = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.1, 0.92), makeMat(baseColor))
+    top.position.y = 0.56
+    group.add(top)
+
+    const legGeom = new THREE.BoxGeometry(0.12, 0.56, 0.12)
+    const legMat = makeMat((baseColor + 0x151515) & 0xffffff)
+    const leg = (x, z) => {
+      const m = new THREE.Mesh(legGeom, legMat)
+      m.position.set(x, 0.28, z)
+      group.add(m)
+    }
+    leg(0.34, 0.34)
+    leg(-0.34, 0.34)
+    leg(0.34, -0.34)
+    leg(-0.34, -0.34)
+  } else if (defId === "plant_basic") {
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.32, 0.26, 14), makeMat(0x6b3f2a))
+    pot.position.y = 0.13
+    group.add(pot)
+
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.46, 10), makeMat(0x2d8a3a))
+    stem.position.y = 0.42
+    group.add(stem)
+
+    const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), makeMat(0x35b44a))
+    leaf.position.y = 0.66
+    group.add(leaf)
+  } else {
+    const geom = new THREE.BoxGeometry(0.86, 0.6, 0.86)
+    const mat = makeMat(baseColor)
+    const mesh = new THREE.Mesh(geom, mat)
+    mesh.position.y = 0.31
+    group.add(mesh)
+  }
+
+  return group
+}
+
+function createGhostFurniMesh(defId) {
+  const group = createFurniMesh(defId)
+  group.traverse((o) => {
+    if (!o?.isMesh) return
+    const c = o.material?.color?.getHex?.() ?? colorFromString(defId)
+    o.material = new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.35 })
+  })
+  return group
 }
 
 function placeItemLocal(item) {
@@ -646,6 +717,8 @@ function setPlacingMode(on) {
       } catch {}
       ghostItem = null
     }
+  } else {
+    ensureGhostForSelected()
   }
 }
 
@@ -661,13 +734,40 @@ function ensureGhostForSelected() {
     ghostItem = null
   }
 
-  const mat = new THREE.MeshBasicMaterial({ color: colorFromString(defId), transparent: true, opacity: 0.35 })
-  const geom = new THREE.BoxGeometry(0.86, 0.6, 0.86)
-  const mesh = new THREE.Mesh(geom, mat)
-  mesh.position.y = 0.31
+  const mesh = createGhostFurniMesh(defId)
   ghostItem = mesh
   ghostInstanceId = selectedInstanceId
   scene.add(ghostItem)
+}
+
+function updateGhostFromMouseEvent(e) {
+  if (!isPlacing) return
+  if (!floor?.userData?.tiles) return
+  if (!raycaster || !mouse || !camera) return
+
+  ensureGhostForSelected()
+  if (!ghostItem) return
+
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1
+  raycaster.setFromCamera(mouse, camera)
+
+  const hits = raycaster.intersectObject(floor.userData.tiles, true)
+  if (!hits || hits.length === 0) {
+    ghostItem.visible = false
+    return
+  }
+
+  const tile = hits[0].object?.userData?.tile
+  if (!tile || !floor?.userData?.tileToWorld) {
+    ghostItem.visible = false
+    return
+  }
+
+  const w = floor.userData.tileToWorld(tile.x, tile.z)
+  ghostItem.visible = true
+  ghostItem.position.x = w.x
+  ghostItem.position.z = w.z
 }
 
 function ensureShopCategories() {
@@ -2086,8 +2186,8 @@ async function init() {
     sendBtn.click()
   })
 
-  const raycaster = new THREE.Raycaster()
-  const mouse = new THREE.Vector2()
+  raycaster = new THREE.Raycaster()
+  mouse = new THREE.Vector2()
 
   let isPanning = false
   let panDidMove = false
@@ -2118,6 +2218,24 @@ async function init() {
   }
 
   const canvasEl = renderer.domElement
+
+  canvasEl.addEventListener(
+    "pointermove",
+    (e) => {
+      if (shouldIgnoreScenePointer(e.target)) return
+      updateGhostFromMouseEvent(e)
+    },
+    { passive: true }
+  )
+
+  canvasEl.addEventListener(
+    "pointerleave",
+    () => {
+      if (ghostItem) ghostItem.visible = false
+    },
+    { passive: true }
+  )
+
   canvasEl.addEventListener("pointerdown", (e) => {
     if (!currentRoom) return
     if (document.body.classList.contains("dragging")) return
