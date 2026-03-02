@@ -1607,6 +1607,10 @@ async function init() {
 
   if (claimCoinsEl) {
     claimCoinsEl.onclick = async () => {
+      const prevText = claimCoinsEl.textContent
+      claimCoinsEl.disabled = true
+      claimCoinsEl.textContent = "Claiming…"
+      if (coinBalanceEl) coinBalanceEl.textContent = "Coins: …"
       try {
         const url = new URL("/api/economy/airdrop", window.location.origin).toString()
         const auth = await getNip98AuthHeader(url, "POST")
@@ -1620,6 +1624,7 @@ async function init() {
         if (!out?.ok) {
           const msg = out?.error || res.status
           appendChatLine(`claim failed: ${msg}`)
+          if (coinBalanceEl) coinBalanceEl.textContent = `Claim failed: ${msg}`
           return
         }
         if (out?.event) {
@@ -1643,6 +1648,10 @@ async function init() {
         refreshCoins()
       } catch {
         appendChatLine("claim failed")
+        if (coinBalanceEl) coinBalanceEl.textContent = "Claim failed"
+      } finally {
+        claimCoinsEl.disabled = false
+        claimCoinsEl.textContent = prevText || "Daily Claim"
       }
     }
   }
