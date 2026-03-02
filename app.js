@@ -65,14 +65,35 @@ function refreshCoins() {
 function renderCatalog() {
   if (!catalogEl) return
   catalogEl.innerHTML = ""
-  for (const it of catalog) {
-    const row = document.createElement("div")
-    row.className = "item"
+  const selectedCat = (shopCategoryEl?.value || "All").trim()
+  const visible = catalog.filter((it) => selectedCat === "All" || (it.category || "Other") === selectedCat)
+  for (const it of visible) {
+    const card = document.createElement("div")
+    card.className = "card"
+    card.classList.toggle("selected", selectedCatalogDefId === it.defId)
+
+    const thumb = document.createElement("div")
+    thumb.className = "thumb"
+    const sq = document.createElement("div")
+    sq.className = "thumb-square"
+    sq.style.background = colorFromId(it.defId)
+    thumb.appendChild(sq)
+    card.appendChild(thumb)
 
     const title = document.createElement("div")
-    title.className = "title"
-    title.textContent = `${it.name} (${it.price})`
-    row.appendChild(title)
+    title.className = "card-title"
+    title.textContent = it.name
+    card.appendChild(title)
+
+    const sub = document.createElement("div")
+    sub.className = "card-sub"
+    sub.textContent = `${it.price} coins`
+    card.appendChild(sub)
+
+    card.onclick = () => {
+      selectedCatalogDefId = it.defId
+      renderCatalog()
+    }
 
     const btn = document.createElement("button")
     btn.className = "primary"
@@ -123,8 +144,8 @@ function renderCatalog() {
         appendChatLine("mint failed")
       }
     }
-    row.appendChild(btn)
-    catalogEl.appendChild(row)
+    card.appendChild(btn)
+    catalogEl.appendChild(card)
   }
 }
 
@@ -146,21 +167,34 @@ function renderInventory() {
   }
 
   for (const it of items) {
-    const row = document.createElement("div")
-    row.className = "item"
-    row.classList.toggle("active", it.instanceId === selectedInstanceId)
+    const card = document.createElement("div")
+    card.className = "card"
+    card.classList.toggle("selected", it.instanceId === selectedInstanceId)
+
+    const thumb = document.createElement("div")
+    thumb.className = "thumb"
+    const sq = document.createElement("div")
+    sq.className = "thumb-square"
+    sq.style.background = colorFromId(it.defId)
+    thumb.appendChild(sq)
+    card.appendChild(thumb)
 
     const title = document.createElement("div")
-    title.className = "title"
-    title.textContent = `${it.defId} (${it.instanceId.slice(0, 6)}...)`
-    row.appendChild(title)
+    title.className = "card-title"
+    title.textContent = it.defId
+    card.appendChild(title)
 
-    row.onclick = () => {
+    const sub = document.createElement("div")
+    sub.className = "card-sub"
+    sub.textContent = it.instanceId.slice(0, 6)
+    card.appendChild(sub)
+
+    card.onclick = () => {
       selectedInstanceId = it.instanceId
       renderInventory()
     }
 
-    inventoryListEl.appendChild(row)
+    inventoryListEl.appendChild(card)
   }
 }
 
@@ -452,8 +486,11 @@ const shopEl = document.getElementById("shop")
 const catalogEl = document.getElementById("catalog")
 const inventoryListEl = document.getElementById("inventoryList")
 const inventoryRefreshEl = document.getElementById("inventoryRefresh")
+const inventoryPlaceEl = document.getElementById("inventoryPlace")
+const inventoryCancelPlaceEl = document.getElementById("inventoryCancelPlace")
 const coinBalanceEl = document.getElementById("coinBalance")
 const claimCoinsEl = document.getElementById("claimCoins")
+const shopCategoryEl = document.getElementById("shopCategory")
 const profileEl = document.getElementById("profile")
 const profileNameEl = document.getElementById("profileName")
 const profileSaveEl = document.getElementById("profileSave")
@@ -470,9 +507,9 @@ let selectedCreateRoomDoor = null
 let customScrollbarApi = null
 
 const catalog = [
-  { defId: "chair_basic", name: "Chair", price: 10 },
-  { defId: "table_basic", name: "Table", price: 25 },
-  { defId: "plant_basic", name: "Plant", price: 15 }
+  { defId: "chair_basic", name: "Chair", price: 10, category: "Seating" },
+  { defId: "table_basic", name: "Table", price: 25, category: "Tables" },
+  { defId: "plant_basic", name: "Plant", price: 15, category: "Decor" }
 ]
 
 const inventoryItems = new Map()
@@ -482,6 +519,54 @@ let selectedInstanceId = ""
 let coinsSub = null
 let coinsBalance = null
 let latestBalanceEvent = null
+
+let selectedCatalogDefId = ""
+let isPlacing = false
+
+function colorFromId(id) {
+  return `#${colorFromString(String(id || "")).toString(16).padStart(6, "0")}`
+}
+
+function getSelectedPlacementDefId() {
+  if (!selectedInstanceId) return ""
+  const inv = inventoryItems.get(selectedInstanceId)
+  return inv?.defId || ""
+}
+
+function setPlacingMode(on) {
+  isPlacing = Boolean(on)
+  if (inventoryPlaceEl) inventoryPlaceEl.classList.toggle("selected", isPlacing)
+  if (inventoryCancelPlaceEl) inventoryCancelPlaceEl.disabled = !isPlacing
+}
+
+function ensureShopCategories() {
+  if (!shopCategoryEl) return
+  const cats = Array.from(new Set(catalog.map((x) => x.category || "Other")))
+  cats.sort((a, b) => a.localeCompare(b))
+  const all = ["All", ...cats]
+  shopCategoryEl.innerHTML = ""
+  for (const c of all) {
+    const opt = document.createElement("option")
+    opt.value = c
+    opt.textContent = c
+    shopCategoryEl.appendChild(opt)
+  }
+}
+
+function tryPlaceSelectedAtTile(tile) {
+  if (!tile || typeof tile.x !== "number" || typeof tile.z !== "number") return false
+  if (!selectedInstanceId || !net) return false
+  const inv = inventoryItems.get(selectedInstanceId)
+  if (!inv?.defId) return false
+  const item = { instanceId: selectedInstanceId, defId: inv.defId, tile: { x: tile.x, z: tile.z } }
+  if (currentRoom?.isHost) {
+    placeItemLocal(item)
+    net.broadcast({ type: "item_placed", item })
+  } else {
+    net.broadcast({ type: "place_item", item })
+  }
+  return true
+}
 
 const placedItems = new Map()
 let placedGroup = null
@@ -1605,6 +1690,25 @@ async function init() {
   refreshInventory()
   refreshCoins()
 
+  ensureShopCategories()
+  if (shopCategoryEl) {
+    shopCategoryEl.onchange = () => renderCatalog()
+  }
+
+  setPlacingMode(false)
+  if (inventoryPlaceEl) {
+    inventoryPlaceEl.onclick = () => {
+      if (!selectedInstanceId) {
+        appendChatLine("select an item to place")
+        return
+      }
+      setPlacingMode(true)
+    }
+  }
+  if (inventoryCancelPlaceEl) {
+    inventoryCancelPlaceEl.onclick = () => setPlacingMode(false)
+  }
+
   if (claimCoinsEl) {
     claimCoinsEl.onclick = async () => {
       const prevText = claimCoinsEl.textContent
@@ -1939,16 +2043,9 @@ async function init() {
     const hitObj = hits[0].object
     const tile = hitObj?.userData?.tile
     if (tile && floor?.userData?.tileToWorld) {
-      if (e.shiftKey && selectedInstanceId && net) {
-        const inv = inventoryItems.get(selectedInstanceId)
-        if (inv?.defId) {
-          const item = { instanceId: selectedInstanceId, defId: inv.defId, tile: { x: tile.x, z: tile.z } }
-          if (currentRoom?.isHost) {
-            placeItemLocal(item)
-            net.broadcast({ type: "item_placed", item })
-          } else {
-            net.broadcast({ type: "place_item", item })
-          }
+      if (isPlacing) {
+        if (tryPlaceSelectedAtTile(tile)) {
+          setPlacingMode(false)
           return
         }
       }

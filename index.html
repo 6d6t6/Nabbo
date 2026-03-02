@@ -74,9 +74,11 @@
     <div class="winbody">
       <div class="row" style="margin-bottom: 6px;">
         <button id="inventoryRefresh" class="primary">Refresh</button>
+        <button id="inventoryPlace" class="primary" type="button">Place</button>
+        <button id="inventoryCancelPlace" type="button">Cancel</button>
       </div>
       <div class="hint" style="margin-bottom: 8px;">Your Items</div>
-      <div id="inventoryList" class="list"></div>
+      <div id="inventoryList" class="grid"></div>
     </div>
   </div>
 
@@ -92,8 +94,11 @@
         <div class="hint" id="coinBalance">Coins: …</div>
         <button id="claimCoins" class="primary" type="button">Daily Claim</button>
       </div>
-      <div class="hint" style="margin-bottom: 8px;">Catalog</div>
-      <div id="catalog" class="list"></div>
+      <div class="row" style="align-items: center; margin-bottom: 8px;">
+        <div class="hint" style="margin-bottom: 0;">Category</div>
+        <select id="shopCategory"></select>
+      </div>
+      <div id="catalog" class="grid"></div>
     </div>
   </div>
 
