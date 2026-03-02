@@ -242,54 +242,29 @@ export async function onRequestPost({ request, env }) {
     return bad(500, "failed to sign")
   }
 
-  let claimPublishOk = 0
-  let claimPublishFail = 0
-  let balancePublishOk = 0
-  let balancePublishFail = 0
+  let publishOk = 0
+  let publishFail = 0
   try {
     const pool = mkPool()
-    const claimPubs = pool.publish(relays, claimMarker)
-    const balancePubs = pool.publish(relays, signed)
-
-    let claimResults
+    const pubs = [...pool.publish(relays, claimMarker), ...pool.publish(relays, signed)]
+    let results
     try {
-      claimResults = await withTimeout(Promise.allSettled(claimPubs), 2500)
+      results = await withTimeout(Promise.allSettled(pubs), 2500)
     } catch {
-      claimResults = null
+      results = null
     }
 
-    if (Array.isArray(claimResults)) {
-      for (const r of claimResults) {
-        if (r.status === "fulfilled") claimPublishOk += 1
-        else claimPublishFail += 1
+    if (Array.isArray(results)) {
+      for (const r of results) {
+        if (r.status === "fulfilled") publishOk += 1
+        else publishFail += 1
       }
     } else {
-      claimPublishFail = claimPubs.length
-    }
-
-    // Fail closed: if the claim marker can't be published anywhere, we must not mint coins.
-    if (claimPublishOk <= 0) {
-      return bad(503, "claim marker publish failed")
-    }
-
-    let balanceResults
-    try {
-      balanceResults = await withTimeout(Promise.allSettled(balancePubs), 2500)
-    } catch {
-      balanceResults = null
-    }
-
-    if (Array.isArray(balanceResults)) {
-      for (const r of balanceResults) {
-        if (r.status === "fulfilled") balancePublishOk += 1
-        else balancePublishFail += 1
-      }
-    } else {
-      balancePublishFail = balancePubs.length
+      // timed out publishing
+      publishFail = pubs.length
     }
   } catch {
-    claimPublishFail = relays.length
-    balancePublishFail = relays.length
+    publishFail = relays.length * 2
   }
 
   return json(200, {
@@ -297,10 +272,7 @@ export async function onRequestPost({ request, env }) {
     claim: claimMarker,
     event: signed,
     relays,
-    publish: {
-      claim: { ok: claimPublishOk, fail: claimPublishFail },
-      balance: { ok: balancePublishOk, fail: balancePublishFail }
-    },
+    publish: { ok: publishOk, fail: publishFail },
     balance: { before: currentBalance, after: newBalance, delta: dailyAmount },
     nextClaimAt: endOfUtcDay(createdAt)
   })
