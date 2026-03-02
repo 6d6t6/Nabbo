@@ -247,13 +247,24 @@ export async function onRequestPost({ request, env }) {
   try {
     const pool = mkPool()
     const pubs = [...pool.publish(relays, claimMarker), ...pool.publish(relays, signed)]
-    const results = await Promise.allSettled(pubs)
-    for (const r of results) {
-      if (r.status === "fulfilled") publishOk += 1
-      else publishFail += 1
+    let results
+    try {
+      results = await withTimeout(Promise.allSettled(pubs), 2500)
+    } catch {
+      results = null
+    }
+
+    if (Array.isArray(results)) {
+      for (const r of results) {
+        if (r.status === "fulfilled") publishOk += 1
+        else publishFail += 1
+      }
+    } else {
+      // timed out publishing
+      publishFail = pubs.length
     }
   } catch {
-    publishFail = relays.length
+    publishFail = relays.length * 2
   }
 
   return json(200, {
