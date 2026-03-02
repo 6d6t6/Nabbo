@@ -13,6 +13,50 @@ let currentFloorPlan = null
 
 let avatars = {}
 
+ function balanceCacheKey(pubkey) {
+   return `nabbo_coins_balance_${String(pubkey || "").toLowerCase()}`
+ }
+ 
+ function balanceEventCacheKey(pubkey) {
+   return `nabbo_coins_balance_event_${String(pubkey || "").toLowerCase()}`
+ }
+ 
+ function loadCachedCoins() {
+   if (!myPubkey) return
+   try {
+     const rawBal = localStorage.getItem(balanceCacheKey(myPubkey))
+     const bal = rawBal == null ? null : Number(rawBal)
+     if (typeof bal === "number" && Number.isFinite(bal) && bal >= 0) {
+       coinsBalance = bal
+     }
+   } catch {}
+
+   try {
+     const rawEv = localStorage.getItem(balanceEventCacheKey(myPubkey))
+     if (rawEv) {
+       const ev = JSON.parse(rawEv)
+       if (ev && typeof ev === "object" && typeof ev.content === "string") {
+         latestBalanceEvent = ev
+       }
+     }
+   } catch {}
+ }
+ 
+ function saveCachedCoins() {
+   if (!myPubkey) return
+   try {
+     if (typeof coinsBalance === "number" && Number.isFinite(coinsBalance) && coinsBalance >= 0) {
+       localStorage.setItem(balanceCacheKey(myPubkey), String(coinsBalance))
+     }
+   } catch {}
+
+   try {
+     if (latestBalanceEvent && typeof latestBalanceEvent === "object") {
+       localStorage.setItem(balanceEventCacheKey(myPubkey), JSON.stringify(latestBalanceEvent))
+     }
+   } catch {}
+ }
+
 function renderCoins() {
   if (!coinBalanceEl) return
   if (typeof coinsBalance === "number" && Number.isFinite(coinsBalance)) {
@@ -32,10 +76,58 @@ function stopCoinsSub() {
 function refreshCoins() {
   if (!myPubkey) return
   stopCoinsSub()
-  coinsBalance = null
-  latestBalanceEvent = null
+
+   loadCachedCoins()
   renderCoins()
   renderCatalog()
+
+   ;(async () => {
+     try {
+       const withTimeout = async (p, ms) => {
+         let t
+         try {
+           return await Promise.race([
+             p,
+             new Promise((_, rej) => {
+               t = setTimeout(() => rej(new Error("timeout")), ms)
+             })
+           ])
+         } finally {
+           if (t) clearTimeout(t)
+         }
+       }
+
+       const evs = await withTimeout(
+         list({
+           kinds: [30078],
+           "#t": ["nabbo-coins"],
+           "#p": [myPubkey],
+           "#d": ["coins"],
+           limit: 10
+         }),
+         2500
+       )
+
+       const sorted = (evs || []).slice().sort((a, b) => (b?.created_at || 0) - (a?.created_at || 0))
+       const ev = sorted[0]
+       if (!ev?.content) return
+       let obj
+       try {
+         obj = JSON.parse(ev.content || "{}")
+       } catch {
+         return
+       }
+       if (obj?.type !== "nabbo_econ_balance") return
+       if (String(obj.pubkey || "").toLowerCase() !== myPubkey.toLowerCase()) return
+       if (typeof obj.balance !== "number" || !Number.isFinite(obj.balance) || obj.balance < 0) return
+
+       coinsBalance = obj.balance
+       latestBalanceEvent = ev
+       saveCachedCoins()
+       renderCoins()
+       renderCatalog()
+     } catch {}
+   })()
 
   coinsSub = subscribe(
     {
@@ -56,6 +148,7 @@ function refreshCoins() {
 
       coinsBalance = obj.balance
       latestBalanceEvent = ev
+      saveCachedCoins()
       renderCoins()
       renderCatalog()
     }
@@ -132,6 +225,7 @@ function renderCatalog() {
             const obj = JSON.parse(out.balanceEvent.content || "{}")
             if (typeof obj.balance === "number") {
               coinsBalance = obj.balance
+              saveCachedCoins()
               renderCoins()
               renderCatalog()
             }
@@ -1774,7 +1868,6 @@ async function init() {
       const prevText = claimCoinsEl.textContent
       claimCoinsEl.disabled = true
       claimCoinsEl.textContent = "Claiming…"
-      if (coinBalanceEl) coinBalanceEl.textContent = "Coins: …"
       try {
         const url = new URL("/api/economy/airdrop", window.location.origin).toString()
         const auth = await getNip98AuthHeader(url, "POST")
