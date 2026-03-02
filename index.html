@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Nostr Habbo</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@300;400;500;700&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200" />
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="lobby" class="window" data-window="navigator" style="left: 20px; top: 20px;">
+    <div class="titlebar">
+      <div class="title">Navigator</div>
+      <button class="winclose" data-winclose="navigator" aria-label="Close">
+        <span class="material-symbols-rounded" aria-hidden="true">close</span>
+      </button>
+    </div>
+
+    <div class="winbody">
+      <div class="tabs">
+        <button id="tabPublic" class="tab active">Public Rooms</button>
+        <button id="tabMine" class="tab">My Rooms</button>
+        <button id="tabJoin" class="tab">Join</button>
+      </div>
+
+      <div id="viewPublic" class="view">
+        <div class="row">
+          <button id="createRoomBtn" class="primary">Create Room</button>
+        </div>
+        <div id="publicRooms" class="list"></div>
+      </div>
+
+      <div id="viewMine" class="view hidden">
+        <div id="myRooms" class="list"></div>
+      </div>
+
+      <div id="viewJoin" class="view hidden">
+        <div class="row">
+          <input id="joinCode" placeholder="Room code or room id" />
+          <button id="joinBtn" class="primary">Join</button>
+        </div>
+        <div id="joinHint" class="hint"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="roomInfo" class="window win-hidden" data-window="roomInfo" style="left: 20px; top: 20px;">
+    <div class="titlebar">
+      <div class="title">Room Info</div>
+      <button class="winclose" data-winclose="roomInfo" aria-label="Close">
+        <span class="material-symbols-rounded" aria-hidden="true">close</span>
+      </button>
+    </div>
+    <div class="winbody" style="padding: 10px;">
+      <div class="hint" id="roomInfoName" style="font-size: 14px; font-weight: 700; opacity: 1;"></div>
+      <div class="hint" id="roomInfoCode"></div>
+      <div class="hint" id="roomInfoHost"></div>
+      <div class="hint" id="roomInfoPlan"></div>
+      <div class="hint" id="roomInfoCount"></div>
+      <div class="row" style="margin-top: 10px;">
+        <button id="roomInfoAction" class="primary">Join</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="inventory" class="window win-hidden" data-window="inventory" style="left: 420px; top: 20px;">
+    <div class="titlebar">
+      <div class="title">Inventory</div>
+      <button class="winclose" data-winclose="inventory" aria-label="Close">
+        <span class="material-symbols-rounded" aria-hidden="true">close</span>
+      </button>
+    </div>
+    <div class="winbody">
+      <div class="hint">Inventory coming soon.</div>
+    </div>
+  </div>
+
+  <div id="profile" class="window win-hidden" data-window="profile" style="left: 20px; top: 20px;">
+    <div class="titlebar">
+      <div class="title">Profile</div>
+      <button class="winclose" data-winclose="profile" aria-label="Close">
+        <span class="material-symbols-rounded" aria-hidden="true">close</span>
+      </button>
+    </div>
+    <div class="winbody" style="padding: 10px;">
+      <div class="row">
+        <input id="profileName" placeholder="Your name" />
+      </div>
+      <div class="row">
+        <button id="profileSave" class="primary">Save</button>
+      </div>
+      <div class="hint">Saved locally on this device.</div>
+    </div>
+  </div>
+
+  <div id="createRoom" class="window win-hidden" data-window="createRoom" style="left: 20px; top: 20px;">
+    <div class="titlebar">
+      <div class="title">Create Room</div>
+      <button class="winclose" data-winclose="createRoom" aria-label="Close">
+        <span class="material-symbols-rounded" aria-hidden="true">close</span>
+      </button>
+    </div>
+    <div class="winbody" style="padding: 10px;">
+      <div class="row">
+        <input id="createRoomName" placeholder="Room name" />
+      </div>
+      <div class="plan-picker" id="createRoomTemplates">
+        <button class="plan-card" type="button" data-door-x="0" data-door-z="3" data-plan-code="xxxxxxx
+x000000
+x000000
+0000000
+x000000
+x000000
+x000000">
+          <div class="plan-preview">
+            <canvas class="plan-canvas" data-plan-preview="template1" width="140" height="90"></canvas>
+          </div>
+          <div class="plan-title">0 tiles</div>
+        </button>
+        <button class="plan-card" type="button" data-door-x="0" data-door-z="4" data-plan-code="xxxxxxx
+xxx0000
+xxx0000
+x000000
+0000000
+x000000
+x000000">
+          <div class="plan-preview">
+            <canvas class="plan-canvas" data-plan-preview="template2" width="140" height="90"></canvas>
+          </div>
+          <div class="plan-title">0 tiles</div>
+        </button>
+        <button class="plan-card" type="button" data-door-x="3" data-door-z="0" data-plan-code="xx0000xx
+x000000x
+00000000
+00000000
+x000000x
+xx0000xx">
+          <div class="plan-preview">
+            <canvas class="plan-canvas" data-plan-preview="template3" width="140" height="90"></canvas>
+          </div>
+          <div class="plan-title">0 tiles</div>
+        </button>
+      </div>
+      <div class="row" style="align-items: center;">
+        <input id="createRoomPublic" type="checkbox" checked />
+        <div class="hint">Announce publicly</div>
+      </div>
+      <div class="row">
+        <button id="createRoomConfirm" class="primary">Host</button>
+        <button id="createRoomCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ui">
+    <input id="chatInput" placeholder="Say something..." />
+    <button id="sendBtn">Send</button>
+  </div>
+
+  <div id="chatLog" class="chatlog"></div>
+
+  <canvas id="scene"></canvas>
+
+  <div id="dock" class="dock">
+    <button id="dockNavigator" class="dockbtn active" aria-label="Navigator">
+      <span class="dock-icon" aria-hidden="true">🧭</span>
+      <span class="sr-only">Navigator</span>
+    </button>
+    <button id="dockInventory" class="dockbtn" aria-label="Inventory">
+      <span class="dock-icon" aria-hidden="true">🎒</span>
+      <span class="sr-only">Inventory</span>
+    </button>
+    <button id="dockProfile" class="dockbtn" aria-label="Profile">
+      <span class="dock-icon" aria-hidden="true">👤</span>
+      <span class="sr-only">Profile</span>
+    </button>
+  </div>
+
+  <script src="lib/nostr.bundle.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
