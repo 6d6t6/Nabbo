@@ -131,14 +131,16 @@ function renderCatalog() {
 function renderInventory() {
   if (!inventoryListEl) return
   inventoryListEl.innerHTML = ""
+  const placedIds = new Set(Array.from(placedItems.keys()))
   const items = Array.from(inventoryItems.values())
     .filter((x) => x?.toPubkey?.toLowerCase?.() === myPubkey?.toLowerCase?.())
+    .filter((x) => !placedIds.has(x.instanceId))
     .sort((a, b) => (b.ts || 0) - (a.ts || 0))
 
   if (items.length === 0) {
     const empty = document.createElement("div")
     empty.className = "hint"
-    empty.textContent = "No items yet. Buy something from the catalog above."
+    empty.textContent = "No items yet. Buy something from the shop."
     inventoryListEl.appendChild(empty)
     return
   }
@@ -252,6 +254,7 @@ function teardownRoom({ reason = null, showLobby = true } = {}) {
     placedGroup = null
   }
   placedItems.clear()
+  renderInventory()
 
   if (chatBubbles.length) {
     for (const b of chatBubbles) {
@@ -312,6 +315,7 @@ function placeItemLocal(item) {
   placedGroup.add(mesh)
 
   placedItems.set(item.instanceId, { ...item, mesh })
+  renderInventory()
 }
 
 const win = createWindowManager({ initialZ: 50, bottomMargin: 70 })
@@ -372,9 +376,11 @@ const chatInput = document.getElementById("chatInput")
 
 const dockNavigator = document.getElementById("dockNavigator")
 const dockInventory = document.getElementById("dockInventory")
+const dockShop = document.getElementById("dockShop")
 const dockProfile = document.getElementById("dockProfile")
 
 const inventoryEl = document.getElementById("inventory")
+const shopEl = document.getElementById("shop")
 const catalogEl = document.getElementById("catalog")
 const inventoryListEl = document.getElementById("inventoryList")
 const inventoryRefreshEl = document.getElementById("inventoryRefresh")
@@ -1533,7 +1539,7 @@ async function init() {
           appendChatLine(`claim failed: ${out?.error || res.status}`)
           return
         }
-        appendChatLine("claimed coins")
+        appendChatLine("daily claim ok")
         await new Promise((r) => setTimeout(r, 600))
         refreshCoins()
       } catch {
@@ -1553,12 +1559,14 @@ async function init() {
 
   lobbyEl.dataset.centerOnOpen = "true"
   inventoryEl.dataset.centerOnOpen = "true"
+  if (shopEl) shopEl.dataset.centerOnOpen = "true"
   if (profileEl) profileEl.dataset.centerOnOpen = "true"
   if (createRoomWinEl) createRoomWinEl.dataset.centerOnOpen = "true"
   if (roomInfoEl) roomInfoEl.dataset.centerOnOpen = "true"
 
   win.centerWindow(lobbyEl, { force: true })
   win.centerWindow(inventoryEl, { force: true })
+  if (shopEl) win.centerWindow(shopEl, { force: true })
   if (profileEl) win.centerWindow(profileEl, { force: true })
   if (createRoomWinEl) win.centerWindow(createRoomWinEl, { force: true })
   if (roomInfoEl) win.centerWindow(roomInfoEl, { force: true })
@@ -1854,12 +1862,14 @@ async function init() {
 
   win.makeDraggable(lobbyEl)
   win.makeDraggable(inventoryEl)
+  if (shopEl) win.makeDraggable(shopEl)
   if (profileEl) win.makeDraggable(profileEl)
   if (createRoomWinEl) win.makeDraggable(createRoomWinEl)
   if (roomInfoEl) win.makeDraggable(roomInfoEl)
 
   win.makeResizable(lobbyEl)
   win.makeResizable(inventoryEl)
+  if (shopEl) win.makeResizable(shopEl)
   if (profileEl) win.makeResizable(profileEl)
   if (createRoomWinEl) win.makeResizable(createRoomWinEl)
   if (roomInfoEl) win.makeResizable(roomInfoEl)
@@ -1869,6 +1879,9 @@ async function init() {
 
   dockNavigator.onclick = () => win.toggleWindow(lobbyEl, dockNavigator)
   dockInventory.onclick = () => win.toggleWindow(inventoryEl, dockInventory)
+  if (dockShop && shopEl) {
+    dockShop.onclick = () => win.toggleWindow(shopEl, dockShop)
+  }
   if (dockProfile && profileEl) {
     dockProfile.onclick = () => win.toggleWindow(profileEl, dockProfile)
   }
@@ -1878,6 +1891,7 @@ async function init() {
       const key = btn.getAttribute("data-winclose")
       if (key === "navigator") win.hideWindow(lobbyEl, dockNavigator)
       if (key === "inventory") win.hideWindow(inventoryEl, dockInventory)
+      if (key === "shop") win.hideWindow(shopEl, dockShop)
       if (key === "profile") win.hideWindow(profileEl, dockProfile)
       if (key === "createRoom") win.hideWindow(createRoomWinEl)
       if (key === "roomInfo") win.hideWindow(roomInfoEl)

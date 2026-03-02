@@ -75,6 +75,7 @@ function makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey, balance, cr
     tags: [
       ["t", "nabbo-econ"],
       ["t", "nabbo-coins"],
+      ["op", "airdrop"],
       ["p", toPubkey],
       ["d", "coins"],
       ["issuer", issuerPubkey]
@@ -84,6 +85,18 @@ function makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey, balance, cr
   }
 
   return tools.finishEvent(eventTemplate, issuerSk)
+}
+
+function startOfUtcDay(tsSeconds) {
+  const ms = tsSeconds * 1000
+  const d = new Date(ms)
+  d.setUTCHours(0, 0, 0, 0)
+  return Math.floor(d.getTime() / 1000)
+}
+
+function endOfUtcDay(tsSeconds) {
+  const start = startOfUtcDay(tsSeconds)
+  return start + 24 * 60 * 60
 }
 
 export async function onRequestPost({ request, env }) {
@@ -98,6 +111,33 @@ export async function onRequestPost({ request, env }) {
   const issuerPubkey = tools.getPublicKey(issuerSk)
   const createdAt = Math.floor(Date.now() / 1000)
 
+  const relays = getRelays(env)
+
+  // Daily claim: one issuer airdrop event per pubkey per UTC day.
+  try {
+    const pool = new tools.SimplePool()
+    const since = startOfUtcDay(createdAt)
+    const existing = await pool.get(relays, {
+      kinds: [30078],
+      authors: [issuerPubkey],
+      "#p": [auth.pubkey],
+      "#d": ["coins"],
+      "#op": ["airdrop"],
+      since
+    })
+
+    if (existing) {
+      return json(429, {
+        ok: false,
+        error: "already claimed today",
+        nextClaimAt: endOfUtcDay(createdAt)
+      })
+    }
+  } catch {
+    // If we can't read relays, fail closed; otherwise daily claim can be bypassed.
+    return bad(503, "relays unavailable")
+  }
+
   // Stateless + free: airdrop sets your balance to a fixed starter amount.
   const starter = 100
 
@@ -108,7 +148,6 @@ export async function onRequestPost({ request, env }) {
     return bad(500, "failed to sign")
   }
 
-  const relays = getRelays(env)
   let publishOk = 0
   let publishFail = 0
   try {
@@ -123,5 +162,11 @@ export async function onRequestPost({ request, env }) {
     publishFail = relays.length
   }
 
-  return json(200, { ok: true, event: signed, relays, publish: { ok: publishOk, fail: publishFail } })
+  return json(200, {
+    ok: true,
+    event: signed,
+    relays,
+    publish: { ok: publishOk, fail: publishFail },
+    nextClaimAt: endOfUtcDay(createdAt)
+  })
 }

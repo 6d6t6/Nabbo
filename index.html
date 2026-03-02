@@ -72,17 +72,28 @@
       </button>
     </div>
     <div class="winbody">
-      <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 10px;">
-        <div class="hint" id="coinBalance">Coins: …</div>
-        <button id="claimCoins" class="primary" type="button">Claim 100</button>
-      </div>
-      <div class="hint" style="margin-bottom: 8px;">Catalog</div>
-      <div id="catalog" class="list" style="margin-bottom: 10px;"></div>
       <div class="row" style="margin-bottom: 6px;">
         <button id="inventoryRefresh" class="primary">Refresh</button>
       </div>
       <div class="hint" style="margin-bottom: 8px;">Your Items</div>
       <div id="inventoryList" class="list"></div>
+    </div>
+  </div>
+
+  <div id="shop" class="window win-hidden" data-window="shop" style="left: 420px; top: 20px;">
+    <div class="titlebar">
+      <div class="title">Shop</div>
+      <button class="winclose" data-winclose="shop" aria-label="Close">
+        <span class="material-symbols-rounded" aria-hidden="true">close</span>
+      </button>
+    </div>
+    <div class="winbody">
+      <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <div class="hint" id="coinBalance">Coins: …</div>
+        <button id="claimCoins" class="primary" type="button">Daily Claim</button>
+      </div>
+      <div class="hint" style="margin-bottom: 8px;">Catalog</div>
+      <div id="catalog" class="list"></div>
     </div>
   </div>
 
@@ -180,6 +191,10 @@ xx0000xx">
     <button id="dockInventory" class="dockbtn" aria-label="Inventory">
       <span class="dock-icon" aria-hidden="true">🎒</span>
       <span class="sr-only">Inventory</span>
+    </button>
+    <button id="dockShop" class="dockbtn" aria-label="Shop">
+      <span class="dock-icon" aria-hidden="true">🛒</span>
+      <span class="sr-only">Shop</span>
     </button>
     <button id="dockProfile" class="dockbtn" aria-label="Profile">
       <span class="dock-icon" aria-hidden="true">👤</span>
