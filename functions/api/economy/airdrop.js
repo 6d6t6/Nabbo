@@ -154,17 +154,36 @@ export async function onRequestPost({ request, env }) {
 
   const relays = getRelays(env)
 
+  const mkPool = () => new tools.SimplePool({ getTimeout: 1800, eoseSubTimeout: 1800 })
+
+  const withTimeout = async (p, ms) => {
+    let t
+    try {
+      return await Promise.race([
+        p,
+        new Promise((_, rej) => {
+          t = setTimeout(() => rej(new Error("timeout")), ms)
+        })
+      ])
+    } finally {
+      if (t) clearTimeout(t)
+    }
+  }
+
   // Daily claim: one issuer airdrop event per pubkey per UTC day.
   try {
-    const pool = new tools.SimplePool()
+    const pool = mkPool()
     const since = startOfUtcDay(createdAt)
-    const existing = await pool.get(relays, {
+    const existing = await withTimeout(
+      pool.get(relays, {
       kinds: [1],
       authors: [issuerPubkey],
       "#t": ["nabbo-claim"],
       "#p": [auth.pubkey],
       since
-    })
+      }),
+      2200
+    )
 
     if (existing) {
       return json(429, {
@@ -183,17 +202,20 @@ export async function onRequestPost({ request, env }) {
 
   let currentBalance = 0
   try {
-    const pool = new tools.SimplePool()
-    const evs = await pool.list(relays, [
-      {
-        kinds: [30078],
-        authors: [issuerPubkey],
-        "#t": ["nabbo-coins"],
-        "#p": [auth.pubkey],
-        "#d": ["coins"],
-        limit: 10
-      }
-    ])
+    const pool = mkPool()
+    const evs = await withTimeout(
+      pool.list(relays, [
+        {
+          kinds: [30078],
+          authors: [issuerPubkey],
+          "#t": ["nabbo-coins"],
+          "#p": [auth.pubkey],
+          "#d": ["coins"],
+          limit: 10
+        }
+      ]),
+      2200
+    )
     const sorted = (evs || []).slice().sort((a, b) => (b?.created_at || 0) - (a?.created_at || 0))
     const parsed = parseBalanceFromEvent(sorted[0])
     if (parsed && String(parsed.pubkey || "").toLowerCase() === auth.pubkey.toLowerCase()) {
@@ -223,7 +245,7 @@ export async function onRequestPost({ request, env }) {
   let publishOk = 0
   let publishFail = 0
   try {
-    const pool = new tools.SimplePool()
+    const pool = mkPool()
     const pubs = [...pool.publish(relays, claimMarker), ...pool.publish(relays, signed)]
     const results = await Promise.allSettled(pubs)
     for (const r of results) {

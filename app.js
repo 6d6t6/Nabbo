@@ -166,31 +166,54 @@ function renderInventory() {
     return
   }
 
+  const stacks = new Map()
   for (const it of items) {
+    const key = String(it.defId || "")
+    if (!stacks.has(key)) stacks.set(key, [])
+    stacks.get(key).push(it)
+  }
+
+  const stackList = Array.from(stacks.entries())
+    .map(([defId, arr]) => ({ defId, arr }))
+    .sort((a, b) => (b.arr?.[0]?.ts || 0) - (a.arr?.[0]?.ts || 0))
+
+  for (const st of stackList) {
+    const defId = st.defId
+    const arr = st.arr
+    const selectedInStack = arr.some((x) => x.instanceId === selectedInstanceId)
+
     const card = document.createElement("div")
     card.className = "card"
-    card.classList.toggle("selected", it.instanceId === selectedInstanceId)
+    card.classList.toggle("selected", selectedInStack)
 
     const thumb = document.createElement("div")
     thumb.className = "thumb"
     const sq = document.createElement("div")
     sq.className = "thumb-square"
-    sq.style.background = colorFromId(it.defId)
+    sq.style.background = colorFromId(defId)
     thumb.appendChild(sq)
     card.appendChild(thumb)
 
+    if (arr.length > 1) {
+      const badge = document.createElement("div")
+      badge.className = "badge"
+      badge.textContent = String(arr.length)
+      card.appendChild(badge)
+    }
+
     const title = document.createElement("div")
     title.className = "card-title"
-    title.textContent = it.defId
+    title.textContent = defId
     card.appendChild(title)
 
     const sub = document.createElement("div")
     sub.className = "card-sub"
-    sub.textContent = it.instanceId.slice(0, 6)
+    sub.textContent = selectedInStack ? selectedInstanceId.slice(0, 6) : `${arr[0].instanceId.slice(0, 6)} · stack`
     card.appendChild(sub)
 
     card.onclick = () => {
-      selectedInstanceId = it.instanceId
+      // Select the newest instance from this stack.
+      selectedInstanceId = arr[0].instanceId
       renderInventory()
     }
 
@@ -522,6 +545,8 @@ let latestBalanceEvent = null
 
 let selectedCatalogDefId = ""
 let isPlacing = false
+let ghostItem = null
+let ghostInstanceId = ""
 
 function colorFromId(id) {
   return `#${colorFromString(String(id || "")).toString(16).padStart(6, "0")}`
@@ -537,6 +562,37 @@ function setPlacingMode(on) {
   isPlacing = Boolean(on)
   if (inventoryPlaceEl) inventoryPlaceEl.classList.toggle("selected", isPlacing)
   if (inventoryCancelPlaceEl) inventoryCancelPlaceEl.disabled = !isPlacing
+
+  if (!isPlacing) {
+    ghostInstanceId = ""
+    if (ghostItem) {
+      try {
+        scene.remove(ghostItem)
+      } catch {}
+      ghostItem = null
+    }
+  }
+}
+
+function ensureGhostForSelected() {
+  const defId = getSelectedPlacementDefId()
+  if (!defId) return
+  if (ghostItem && ghostInstanceId === selectedInstanceId) return
+
+  if (ghostItem) {
+    try {
+      scene.remove(ghostItem)
+    } catch {}
+    ghostItem = null
+  }
+
+  const mat = new THREE.MeshBasicMaterial({ color: colorFromString(defId), transparent: true, opacity: 0.35 })
+  const geom = new THREE.BoxGeometry(0.86, 0.6, 0.86)
+  const mesh = new THREE.Mesh(geom, mat)
+  mesh.position.y = 0.31
+  ghostItem = mesh
+  ghostInstanceId = selectedInstanceId
+  scene.add(ghostItem)
 }
 
 function ensureShopCategories() {
@@ -1703,10 +1759,14 @@ async function init() {
         return
       }
       setPlacingMode(true)
+      if (inventoryEl) win.hideWindow(inventoryEl, dockInventory)
     }
   }
   if (inventoryCancelPlaceEl) {
-    inventoryCancelPlaceEl.onclick = () => setPlacingMode(false)
+    inventoryCancelPlaceEl.onclick = () => {
+      setPlacingMode(false)
+      if (inventoryEl) win.showWindow(inventoryEl, dockInventory)
+    }
   }
 
   if (claimCoinsEl) {
@@ -1718,12 +1778,16 @@ async function init() {
       try {
         const url = new URL("/api/economy/airdrop", window.location.origin).toString()
         const auth = await getNip98AuthHeader(url, "POST")
+        const ctrl = new AbortController()
+        const timeoutId = setTimeout(() => ctrl.abort(), 9000)
         const res = await fetch(url, {
           method: "POST",
           headers: {
             Authorization: auth
-          }
+          },
+          signal: ctrl.signal
         })
+        clearTimeout(timeoutId)
         const out = await res.json().catch(() => null)
         if (!out?.ok) {
           const msg = out?.error || res.status
@@ -1750,9 +1814,10 @@ async function init() {
         }
         await new Promise((r) => setTimeout(r, 600))
         refreshCoins()
-      } catch {
-        appendChatLine("claim failed")
-        if (coinBalanceEl) coinBalanceEl.textContent = "Claim failed"
+      } catch (e) {
+        const msg = e?.name === "AbortError" ? "timeout" : "claim failed"
+        appendChatLine(msg)
+        if (coinBalanceEl) coinBalanceEl.textContent = msg
       } finally {
         claimCoinsEl.disabled = false
         claimCoinsEl.textContent = prevText || "Daily Claim"
@@ -2039,13 +2104,21 @@ async function init() {
     const tileGroup = floor.userData?.tiles
     if (!tileGroup) return
     const hits = raycaster.intersectObject(tileGroup, true)
-    if (!hits || hits.length === 0) return
+    if (!hits || hits.length === 0) {
+      if (isPlacing) {
+        setPlacingMode(false)
+        if (inventoryEl) win.showWindow(inventoryEl, dockInventory)
+      }
+      return
+    }
     const hitObj = hits[0].object
     const tile = hitObj?.userData?.tile
     if (tile && floor?.userData?.tileToWorld) {
       if (isPlacing) {
+        ensureGhostForSelected()
         if (tryPlaceSelectedAtTile(tile)) {
           setPlacingMode(false)
+          if (inventoryEl) win.showWindow(inventoryEl, dockInventory)
           return
         }
       }
