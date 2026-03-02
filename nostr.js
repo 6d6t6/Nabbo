@@ -82,6 +82,34 @@ export function subscribe(filters, onEvent) {
   return sub
 }
 
+export async function list(filters) {
+  const events = await pool.list(relays, [filters], {})
+  return events
+}
+
 export function getPubkey() {
   return pk
+}
+
+export async function getNip98AuthHeader(url, method) {
+  const nip98 = globalThis.NostrTools?.nip98
+  if (!nip98) {
+    throw new Error("NIP-98 not available (nostr.bundle.js not loaded)")
+  }
+
+  const u = String(url || "")
+  const m = String(method || "GET").toUpperCase()
+  if (!u) throw new Error("missing url")
+
+  const sign = async (eventTemplate) => {
+    if (usingExtension) {
+      return await window.nostr.signEvent(eventTemplate)
+    }
+    if (!sk) {
+      throw new Error("local secret key not initialized")
+    }
+    return finishEvent(eventTemplate, sk)
+  }
+
+  return await nip98.getToken(u, m, sign, true)
 }

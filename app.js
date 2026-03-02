@@ -1,5 +1,5 @@
 import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js'
-import { initNostr, publish, subscribe, getPubkey } from "./nostr.js"
+import { initNostr, publish, subscribe, list, getPubkey, getNip98AuthHeader } from "./nostr.js"
 import { createRoom } from './room.js'
 import { createAvatar, updateAvatarPosition } from './avatar.js'
 import { NabboNet, createRoomId, roomIdToCode } from "./webrtc.js"
@@ -12,6 +12,344 @@ let floor
 let currentFloorPlan = null
 
 let avatars = {}
+
+ function balanceCacheKey(pubkey) {
+   return `nabbo_coins_balance_${String(pubkey || "").toLowerCase()}`
+ }
+ 
+ function balanceEventCacheKey(pubkey) {
+   return `nabbo_coins_balance_event_${String(pubkey || "").toLowerCase()}`
+ }
+ 
+ function loadCachedCoins() {
+   if (!myPubkey) return
+   try {
+     const rawBal = localStorage.getItem(balanceCacheKey(myPubkey))
+     const bal = rawBal == null ? null : Number(rawBal)
+     if (typeof bal === "number" && Number.isFinite(bal) && bal >= 0) {
+       coinsBalance = bal
+     }
+   } catch {}
+
+   try {
+     const rawEv = localStorage.getItem(balanceEventCacheKey(myPubkey))
+     if (rawEv) {
+       const ev = JSON.parse(rawEv)
+       if (ev && typeof ev === "object" && typeof ev.content === "string") {
+         latestBalanceEvent = ev
+       }
+     }
+   } catch {}
+ }
+ 
+ function saveCachedCoins() {
+   if (!myPubkey) return
+   try {
+     if (typeof coinsBalance === "number" && Number.isFinite(coinsBalance) && coinsBalance >= 0) {
+       localStorage.setItem(balanceCacheKey(myPubkey), String(coinsBalance))
+     }
+   } catch {}
+
+   try {
+     if (latestBalanceEvent && typeof latestBalanceEvent === "object") {
+       localStorage.setItem(balanceEventCacheKey(myPubkey), JSON.stringify(latestBalanceEvent))
+     }
+   } catch {}
+ }
+
+function renderCoins() {
+  if (!coinBalanceEl) return
+  if (typeof coinsBalance === "number" && Number.isFinite(coinsBalance)) {
+    coinBalanceEl.textContent = `Coins: ${coinsBalance}`
+  } else {
+    coinBalanceEl.textContent = "Coins: …"
+  }
+}
+
+function stopCoinsSub() {
+  try {
+    coinsSub?.unsub?.()
+  } catch {}
+  coinsSub = null
+}
+
+function refreshCoins() {
+  if (!myPubkey) return
+  stopCoinsSub()
+
+   loadCachedCoins()
+  renderCoins()
+  renderCatalog()
+
+   ;(async () => {
+     try {
+       const withTimeout = async (p, ms) => {
+         let t
+         try {
+           return await Promise.race([
+             p,
+             new Promise((_, rej) => {
+               t = setTimeout(() => rej(new Error("timeout")), ms)
+             })
+           ])
+         } finally {
+           if (t) clearTimeout(t)
+         }
+       }
+
+       const evs = await withTimeout(
+         list({
+           kinds: [30078],
+           "#t": ["nabbo-coins"],
+           "#p": [myPubkey],
+           "#d": ["coins"],
+           limit: 10
+         }),
+         2500
+       )
+
+       const sorted = (evs || []).slice().sort((a, b) => (b?.created_at || 0) - (a?.created_at || 0))
+       const ev = sorted[0]
+       if (!ev?.content) return
+       let obj
+       try {
+         obj = JSON.parse(ev.content || "{}")
+       } catch {
+         return
+       }
+       if (obj?.type !== "nabbo_econ_balance") return
+       if (String(obj.pubkey || "").toLowerCase() !== myPubkey.toLowerCase()) return
+       if (typeof obj.balance !== "number" || !Number.isFinite(obj.balance) || obj.balance < 0) return
+
+       coinsBalance = obj.balance
+       latestBalanceEvent = ev
+       saveCachedCoins()
+       renderCoins()
+       renderCatalog()
+     } catch {}
+   })()
+
+  coinsSub = subscribe(
+    {
+      kinds: [30078],
+      "#t": ["nabbo-coins"],
+      "#p": [myPubkey]
+    },
+    (ev) => {
+      let obj
+      try {
+        obj = JSON.parse(ev?.content || "{}")
+      } catch {
+        return
+      }
+      if (obj?.type !== "nabbo_econ_balance") return
+      if (String(obj.pubkey || "").toLowerCase() !== myPubkey.toLowerCase()) return
+      if (typeof obj.balance !== "number" || !Number.isFinite(obj.balance) || obj.balance < 0) return
+
+      coinsBalance = obj.balance
+      latestBalanceEvent = ev
+      saveCachedCoins()
+      renderCoins()
+      renderCatalog()
+    }
+  )
+}
+
+function renderCatalog() {
+  if (!catalogEl) return
+  catalogEl.innerHTML = ""
+  const selectedCat = (shopCategoryEl?.value || "All").trim()
+  const visible = catalog.filter((it) => selectedCat === "All" || (it.category || "Other") === selectedCat)
+  for (const it of visible) {
+    const card = document.createElement("div")
+    card.className = "card"
+    card.classList.toggle("selected", selectedCatalogDefId === it.defId)
+
+    const thumb = document.createElement("div")
+    thumb.className = "thumb"
+    const sq = document.createElement("div")
+    sq.className = "thumb-square"
+    sq.style.background = colorFromId(it.defId)
+    thumb.appendChild(sq)
+    card.appendChild(thumb)
+
+    const title = document.createElement("div")
+    title.className = "card-title"
+    title.textContent = it.name
+    card.appendChild(title)
+
+    const sub = document.createElement("div")
+    sub.className = "card-sub"
+    sub.textContent = `${it.price} coins`
+    card.appendChild(sub)
+
+    card.onclick = () => {
+      selectedCatalogDefId = it.defId
+      renderCatalog()
+    }
+
+    const btn = document.createElement("button")
+    btn.className = "primary"
+    btn.textContent = "Buy"
+    btn.type = "button"
+    const price = Number(it.price || 0)
+    if (typeof coinsBalance === "number" && Number.isFinite(coinsBalance)) {
+      btn.disabled = coinsBalance < price
+    } else {
+      btn.disabled = true
+    }
+    btn.onclick = async () => {
+      try {
+        if (!latestBalanceEvent) {
+          appendChatLine("no coin balance yet - claim coins first")
+          return
+        }
+        const url = new URL("/api/economy/mint", window.location.origin).toString()
+        const auth = await getNip98AuthHeader(url, "POST")
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            Authorization: auth
+          },
+          body: JSON.stringify({ defId: it.defId, toPubkey: myPubkey, balanceEvent: latestBalanceEvent })
+        })
+        const out = await res.json().catch(() => null)
+        if (!out?.ok) {
+          appendChatLine(`mint failed: ${out?.error || res.status}`)
+          return
+        }
+        if (out?.balanceEvent) {
+          latestBalanceEvent = out.balanceEvent
+          try {
+            const obj = JSON.parse(out.balanceEvent.content || "{}")
+            if (typeof obj.balance === "number") {
+              coinsBalance = obj.balance
+              saveCachedCoins()
+              renderCoins()
+              renderCatalog()
+            }
+          } catch {}
+        }
+        appendChatLine(`bought: ${it.name}`)
+        await new Promise((r) => setTimeout(r, 600))
+        refreshInventory()
+      } catch (e) {
+        appendChatLine("mint failed")
+      }
+    }
+    card.appendChild(btn)
+    catalogEl.appendChild(card)
+  }
+}
+
+function renderInventory() {
+  if (!inventoryListEl) return
+  inventoryListEl.innerHTML = ""
+  const placedIds = new Set(Array.from(placedItems.keys()))
+  const items = Array.from(inventoryItems.values())
+    .filter((x) => x?.toPubkey?.toLowerCase?.() === myPubkey?.toLowerCase?.())
+    .filter((x) => !placedIds.has(x.instanceId))
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+
+  if (items.length === 0) {
+    const empty = document.createElement("div")
+    empty.className = "hint"
+    empty.textContent = "No items yet. Buy something from the shop."
+    inventoryListEl.appendChild(empty)
+    return
+  }
+
+  const stacks = new Map()
+  for (const it of items) {
+    const key = String(it.defId || "")
+    if (!stacks.has(key)) stacks.set(key, [])
+    stacks.get(key).push(it)
+  }
+
+  const stackList = Array.from(stacks.entries())
+    .map(([defId, arr]) => ({ defId, arr }))
+    .sort((a, b) => (b.arr?.[0]?.ts || 0) - (a.arr?.[0]?.ts || 0))
+
+  for (const st of stackList) {
+    const defId = st.defId
+    const arr = st.arr
+    const selectedInStack = arr.some((x) => x.instanceId === selectedInstanceId)
+
+    const card = document.createElement("div")
+    card.className = "card"
+    card.classList.toggle("selected", selectedInStack)
+
+    const thumb = document.createElement("div")
+    thumb.className = "thumb"
+    const sq = document.createElement("div")
+    sq.className = "thumb-square"
+    sq.style.background = colorFromId(defId)
+    thumb.appendChild(sq)
+    card.appendChild(thumb)
+
+    if (arr.length > 1) {
+      const badge = document.createElement("div")
+      badge.className = "badge"
+      badge.textContent = String(arr.length)
+      card.appendChild(badge)
+    }
+
+    const title = document.createElement("div")
+    title.className = "card-title"
+    title.textContent = defId
+    card.appendChild(title)
+
+    const sub = document.createElement("div")
+    sub.className = "card-sub"
+    sub.textContent = selectedInStack ? selectedInstanceId.slice(0, 6) : `${arr[0].instanceId.slice(0, 6)} · stack`
+    card.appendChild(sub)
+
+    card.onclick = () => {
+      // Select the newest instance from this stack.
+      selectedInstanceId = arr[0].instanceId
+      renderInventory()
+    }
+
+    inventoryListEl.appendChild(card)
+  }
+}
+
+function stopInventorySub() {
+  try {
+    inventorySub?.unsub?.()
+  } catch {}
+  inventorySub = null
+}
+
+function refreshInventory() {
+  if (!myPubkey) return
+  stopInventorySub()
+  inventoryItems.clear()
+
+  inventorySub = subscribe(
+    {
+      kinds: [1],
+      "#t": ["nabbo-item"],
+      "#p": [myPubkey],
+      since: Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 30
+    },
+    (ev) => {
+      let obj
+      try {
+        obj = JSON.parse(ev?.content || "{}")
+      } catch {
+        return
+      }
+      if (obj?.type !== "nabbo_econ_mint") return
+      if (!obj.instanceId || !obj.defId || !obj.toPubkey) return
+      inventoryItems.set(obj.instanceId, obj)
+      renderInventory()
+    }
+  )
+
+  renderInventory()
+}
 
 function clampToWalkable(pos) {
   if (!floor?.userData?.tileSet || isTileWalkable(pos)) return pos
@@ -60,6 +398,15 @@ function teardownRoom({ reason = null, showLobby = true } = {}) {
   myAvatar = null
   remoteTargets = {}
 
+  if (placedGroup) {
+    try {
+      scene.remove(placedGroup)
+    } catch {}
+    placedGroup = null
+  }
+  placedItems.clear()
+  renderInventory()
+
   if (chatBubbles.length) {
     for (const b of chatBubbles) {
       try {
@@ -74,6 +421,117 @@ function teardownRoom({ reason = null, showLobby = true } = {}) {
     win.showWindow(lobbyEl, dockNavigator)
     win.focusWindow(lobbyEl)
   }
+}
+
+function ensurePlacedGroup() {
+  if (placedGroup) return
+  placedGroup = new THREE.Group()
+  scene.add(placedGroup)
+}
+
+function colorFromString(s) {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return (h >>> 0) % 0xffffff
+}
+
+function createFurniMesh(defId) {
+  const geom = new THREE.BoxGeometry(0.86, 0.6, 0.86)
+  const mat = new THREE.MeshBasicMaterial({ color: colorFromString(defId || "furni") })
+  const mesh = new THREE.Mesh(geom, mat)
+  mesh.position.y = 0.31
+  return mesh
+}
+
+function placeItemLocal(item) {
+  if (!item?.instanceId || !item?.tile) return
+  if (!floor?.userData?.tileToWorld) return
+
+  ensurePlacedGroup()
+
+  const existing = placedItems.get(item.instanceId)
+  if (existing?.mesh) {
+    try {
+      placedGroup.remove(existing.mesh)
+    } catch {}
+  }
+
+  const w = floor.userData.tileToWorld(item.tile.x, item.tile.z)
+  const mesh = createFurniMesh(item.defId)
+  mesh.position.x = w.x
+  mesh.position.z = w.z
+  placedGroup.add(mesh)
+
+  placedItems.set(item.instanceId, { ...item, mesh })
+  renderInventory()
+
+  if (currentRoom?.isHost && !loadingRoomState) {
+    scheduleSaveRoomFurni()
+  }
+}
+
+function getRoomStateTags(roomId) {
+  return [
+    ["t", "nabbo-room"],
+    ["t", "nabbo-room-state"],
+    ["d", String(roomId)],
+    ["room", String(roomId)]
+  ]
+}
+
+function scheduleSaveRoomFurni() {
+  if (!currentRoom?.isHost || !currentRoom?.roomId) return
+  if (furniSaveTimer) {
+    clearTimeout(furniSaveTimer)
+  }
+  furniSaveTimer = setTimeout(() => {
+    furniSaveTimer = null
+    saveRoomFurni().catch(() => {})
+  }, 800)
+}
+
+async function saveRoomFurni() {
+  if (!currentRoom?.isHost || !currentRoom?.roomId) return
+  const roomId = currentRoom.roomId
+  const items = Array.from(placedItems.values()).map((it) => ({
+    instanceId: it.instanceId,
+    defId: it.defId,
+    tile: it.tile
+  }))
+  const contentObj = {
+    type: "nabbo_room_state",
+    roomId,
+    items,
+    ts: Math.floor(Date.now() / 1000)
+  }
+  await publish(30078, JSON.stringify(contentObj), getRoomStateTags(roomId))
+}
+
+async function loadRoomFurni(roomId) {
+  const evs = await list({
+    kinds: [30078],
+    "#t": ["nabbo-room-state"],
+    "#d": [String(roomId)],
+    limit: 10
+  })
+  const sorted = (evs || []).slice().sort((a, b) => (b?.created_at || 0) - (a?.created_at || 0))
+  const ev = sorted[0]
+  if (!ev) return []
+  let obj
+  try {
+    obj = JSON.parse(ev.content || "{}")
+  } catch {
+    return []
+  }
+  if (obj?.type !== "nabbo_room_state") return []
+  if (String(obj.roomId || "") !== String(roomId)) return []
+  if (!Array.isArray(obj.items)) return []
+  return obj.items
+    .filter((it) => it?.instanceId && it?.defId && it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number")
+    .map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile }))
 }
 
 const win = createWindowManager({ initialZ: 50, bottomMargin: 70 })
@@ -93,6 +551,9 @@ let publicRooms = null
 
 let currentRoom = null
 let net = null
+
+let furniSaveTimer = null
+let loadingRoomState = false
 
 let suppressDisconnectUntil = 0
 
@@ -134,9 +595,19 @@ const chatInput = document.getElementById("chatInput")
 
 const dockNavigator = document.getElementById("dockNavigator")
 const dockInventory = document.getElementById("dockInventory")
+const dockShop = document.getElementById("dockShop")
 const dockProfile = document.getElementById("dockProfile")
 
 const inventoryEl = document.getElementById("inventory")
+const shopEl = document.getElementById("shop")
+const catalogEl = document.getElementById("catalog")
+const inventoryListEl = document.getElementById("inventoryList")
+const inventoryRefreshEl = document.getElementById("inventoryRefresh")
+const inventoryPlaceEl = document.getElementById("inventoryPlace")
+const inventoryCancelPlaceEl = document.getElementById("inventoryCancelPlace")
+const coinBalanceEl = document.getElementById("coinBalance")
+const claimCoinsEl = document.getElementById("claimCoins")
+const shopCategoryEl = document.getElementById("shopCategory")
 const profileEl = document.getElementById("profile")
 const profileNameEl = document.getElementById("profileName")
 const profileSaveEl = document.getElementById("profileSave")
@@ -151,6 +622,104 @@ const createRoomCancelEl = document.getElementById("createRoomCancel")
 let selectedCreateRoomPlan = ""
 let selectedCreateRoomDoor = null
 let customScrollbarApi = null
+
+const catalog = [
+  { defId: "chair_basic", name: "Chair", price: 10, category: "Seating" },
+  { defId: "table_basic", name: "Table", price: 25, category: "Tables" },
+  { defId: "plant_basic", name: "Plant", price: 15, category: "Decor" }
+]
+
+const inventoryItems = new Map()
+let inventorySub = null
+let selectedInstanceId = ""
+
+let coinsSub = null
+let coinsBalance = null
+let latestBalanceEvent = null
+
+let selectedCatalogDefId = ""
+let isPlacing = false
+let ghostItem = null
+let ghostInstanceId = ""
+
+function colorFromId(id) {
+  return `#${colorFromString(String(id || "")).toString(16).padStart(6, "0")}`
+}
+
+function getSelectedPlacementDefId() {
+  if (!selectedInstanceId) return ""
+  const inv = inventoryItems.get(selectedInstanceId)
+  return inv?.defId || ""
+}
+
+function setPlacingMode(on) {
+  isPlacing = Boolean(on)
+  if (inventoryPlaceEl) inventoryPlaceEl.classList.toggle("selected", isPlacing)
+  if (inventoryCancelPlaceEl) inventoryCancelPlaceEl.disabled = !isPlacing
+
+  if (!isPlacing) {
+    ghostInstanceId = ""
+    if (ghostItem) {
+      try {
+        scene.remove(ghostItem)
+      } catch {}
+      ghostItem = null
+    }
+  }
+}
+
+function ensureGhostForSelected() {
+  const defId = getSelectedPlacementDefId()
+  if (!defId) return
+  if (ghostItem && ghostInstanceId === selectedInstanceId) return
+
+  if (ghostItem) {
+    try {
+      scene.remove(ghostItem)
+    } catch {}
+    ghostItem = null
+  }
+
+  const mat = new THREE.MeshBasicMaterial({ color: colorFromString(defId), transparent: true, opacity: 0.35 })
+  const geom = new THREE.BoxGeometry(0.86, 0.6, 0.86)
+  const mesh = new THREE.Mesh(geom, mat)
+  mesh.position.y = 0.31
+  ghostItem = mesh
+  ghostInstanceId = selectedInstanceId
+  scene.add(ghostItem)
+}
+
+function ensureShopCategories() {
+  if (!shopCategoryEl) return
+  const cats = Array.from(new Set(catalog.map((x) => x.category || "Other")))
+  cats.sort((a, b) => a.localeCompare(b))
+  const all = ["All", ...cats]
+  shopCategoryEl.innerHTML = ""
+  for (const c of all) {
+    const opt = document.createElement("option")
+    opt.value = c
+    opt.textContent = c
+    shopCategoryEl.appendChild(opt)
+  }
+}
+
+function tryPlaceSelectedAtTile(tile) {
+  if (!tile || typeof tile.x !== "number" || typeof tile.z !== "number") return false
+  if (!selectedInstanceId || !net) return false
+  const inv = inventoryItems.get(selectedInstanceId)
+  if (!inv?.defId) return false
+  const item = { instanceId: selectedInstanceId, defId: inv.defId, tile: { x: tile.x, z: tile.z } }
+  if (currentRoom?.isHost) {
+    placeItemLocal(item)
+    net.broadcast({ type: "item_placed", item })
+  } else {
+    net.broadcast({ type: "place_item", item })
+  }
+  return true
+}
+
+const placedItems = new Map()
+let placedGroup = null
 
 function getDefaultPlanCode() {
   return [
@@ -1015,6 +1584,21 @@ function handleNetMessage(fromPubkey, msg) {
     } else {
       setRemoteTarget(who, msg.pos)
     }
+    return
+  }
+
+  if (msg.type === "room_items" && Array.isArray(msg.items)) {
+    for (const it of msg.items) {
+      if (!it?.instanceId || !it?.defId || !it?.tile) continue
+      if (typeof it.tile.x !== "number" || typeof it.tile.z !== "number") continue
+      placeItemLocal(it)
+    }
+    return
+  }
+
+  if (msg.type === "item_placed" && msg.item) {
+    placeItemLocal(msg.item)
+    return
   }
 }
 
@@ -1036,6 +1620,11 @@ function handlePeerState(peer, state) {
         return { pubkey, name: getDisplayName(pubkey), pos: p, tile: toTileCoord(p) }
       })
       net.sendTo(peer, { type: "snapshot", players })
+
+      const items = Array.from(placedItems.values()).map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile }))
+      if (items.length) {
+        net.sendTo(peer, { type: "room_items", items })
+      }
     } else {
       net.sendTo(currentRoom.ownerPubkey, { type: "hello", name: myDisplayName, pos: snappedMyPos, tile: toTileCoord(snappedMyPos) })
     }
@@ -1109,6 +1698,20 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
     currentFloorPlan = effectivePlan
   }
 
+  if (isHost && roomId) {
+    try {
+      loadingRoomState = true
+      const items = await loadRoomFurni(roomId)
+      for (const it of items) {
+        placeItemLocal(it)
+      }
+    } catch {
+      // ignore restore failures
+    } finally {
+      loadingRoomState = false
+    }
+  }
+
   myAvatar = ensureAvatar(myPubkey)
   const startPos = snapToTileCenter(getSpawnPos())
   updateAvatarPosition(myAvatar, startPos)
@@ -1146,6 +1749,15 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
           const out = { ...msg, pubkey: peer }
           handleNetMessage(peer, out)
           net.broadcast(out)
+          return
+        }
+
+        if (msg.type === "place_item" && msg.item) {
+          const item = msg.item
+          if (item?.instanceId && item?.defId && item?.tile && typeof item.tile.x === "number" && typeof item.tile.z === "number") {
+            placeItemLocal(item)
+            net.broadcast({ type: "item_placed", item })
+          }
           return
         }
       }
@@ -1224,16 +1836,107 @@ async function init() {
   if (myDisplayName) playerNames[myPubkey] = myDisplayName
   requestNostrProfile(myPubkey)
 
+  renderCatalog()
+  refreshInventory()
+  refreshCoins()
+
+  ensureShopCategories()
+  if (shopCategoryEl) {
+    shopCategoryEl.onchange = () => renderCatalog()
+  }
+
+  setPlacingMode(false)
+  if (inventoryPlaceEl) {
+    inventoryPlaceEl.onclick = () => {
+      if (!selectedInstanceId) {
+        appendChatLine("select an item to place")
+        return
+      }
+      setPlacingMode(true)
+      if (inventoryEl) win.hideWindow(inventoryEl, dockInventory)
+    }
+  }
+  if (inventoryCancelPlaceEl) {
+    inventoryCancelPlaceEl.onclick = () => {
+      setPlacingMode(false)
+      if (inventoryEl) win.showWindow(inventoryEl, dockInventory)
+    }
+  }
+
+  if (claimCoinsEl) {
+    claimCoinsEl.onclick = async () => {
+      const prevText = claimCoinsEl.textContent
+      claimCoinsEl.disabled = true
+      claimCoinsEl.textContent = "Claiming…"
+      try {
+        const url = new URL("/api/economy/airdrop", window.location.origin).toString()
+        const auth = await getNip98AuthHeader(url, "POST")
+        const ctrl = new AbortController()
+        const timeoutId = setTimeout(() => ctrl.abort(), 9000)
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: auth
+          },
+          signal: ctrl.signal
+        })
+        clearTimeout(timeoutId)
+        const out = await res.json().catch(() => null)
+        if (!out?.ok) {
+          const msg = out?.error || res.status
+          appendChatLine(`claim failed: ${msg}`)
+          if (coinBalanceEl) coinBalanceEl.textContent = `Claim failed: ${msg}`
+          return
+        }
+        if (out?.event) {
+          latestBalanceEvent = out.event
+          try {
+            const obj = JSON.parse(out.event.content || "{}")
+            if (typeof obj.balance === "number") {
+              coinsBalance = obj.balance
+              renderCoins()
+              renderCatalog()
+            }
+          } catch {}
+        }
+
+        if (out?.balance?.delta) {
+          appendChatLine(`daily claim +${out.balance.delta}`)
+        } else {
+          appendChatLine("daily claim ok")
+        }
+        await new Promise((r) => setTimeout(r, 600))
+        refreshCoins()
+      } catch (e) {
+        const msg = e?.name === "AbortError" ? "timeout" : "claim failed"
+        appendChatLine(msg)
+        if (coinBalanceEl) coinBalanceEl.textContent = msg
+      } finally {
+        claimCoinsEl.disabled = false
+        claimCoinsEl.textContent = prevText || "Daily Claim"
+      }
+    }
+  }
+
+  if (inventoryRefreshEl) {
+    inventoryRefreshEl.onclick = () => {
+      refreshInventory()
+      refreshCoins()
+    }
+  }
+
   setInRoom(false)
 
   lobbyEl.dataset.centerOnOpen = "true"
   inventoryEl.dataset.centerOnOpen = "true"
+  if (shopEl) shopEl.dataset.centerOnOpen = "true"
   if (profileEl) profileEl.dataset.centerOnOpen = "true"
   if (createRoomWinEl) createRoomWinEl.dataset.centerOnOpen = "true"
   if (roomInfoEl) roomInfoEl.dataset.centerOnOpen = "true"
 
   win.centerWindow(lobbyEl, { force: true })
   win.centerWindow(inventoryEl, { force: true })
+  if (shopEl) win.centerWindow(shopEl, { force: true })
   if (profileEl) win.centerWindow(profileEl, { force: true })
   if (createRoomWinEl) win.centerWindow(createRoomWinEl, { force: true })
   if (roomInfoEl) win.centerWindow(roomInfoEl, { force: true })
@@ -1494,10 +2197,24 @@ async function init() {
     const tileGroup = floor.userData?.tiles
     if (!tileGroup) return
     const hits = raycaster.intersectObject(tileGroup, true)
-    if (!hits || hits.length === 0) return
+    if (!hits || hits.length === 0) {
+      if (isPlacing) {
+        setPlacingMode(false)
+        if (inventoryEl) win.showWindow(inventoryEl, dockInventory)
+      }
+      return
+    }
     const hitObj = hits[0].object
     const tile = hitObj?.userData?.tile
     if (tile && floor?.userData?.tileToWorld) {
+      if (isPlacing) {
+        ensureGhostForSelected()
+        if (tryPlaceSelectedAtTile(tile)) {
+          setPlacingMode(false)
+          if (inventoryEl) win.showWindow(inventoryEl, dockInventory)
+          return
+        }
+      }
       const w = floor.userData.tileToWorld(tile.x, tile.z)
       const target = { x: w.x, z: w.z }
       if (!isTileWalkable(target)) return
@@ -1516,12 +2233,14 @@ async function init() {
 
   win.makeDraggable(lobbyEl)
   win.makeDraggable(inventoryEl)
+  if (shopEl) win.makeDraggable(shopEl)
   if (profileEl) win.makeDraggable(profileEl)
   if (createRoomWinEl) win.makeDraggable(createRoomWinEl)
   if (roomInfoEl) win.makeDraggable(roomInfoEl)
 
   win.makeResizable(lobbyEl)
   win.makeResizable(inventoryEl)
+  if (shopEl) win.makeResizable(shopEl)
   if (profileEl) win.makeResizable(profileEl)
   if (createRoomWinEl) win.makeResizable(createRoomWinEl)
   if (roomInfoEl) win.makeResizable(roomInfoEl)
@@ -1531,6 +2250,9 @@ async function init() {
 
   dockNavigator.onclick = () => win.toggleWindow(lobbyEl, dockNavigator)
   dockInventory.onclick = () => win.toggleWindow(inventoryEl, dockInventory)
+  if (dockShop && shopEl) {
+    dockShop.onclick = () => win.toggleWindow(shopEl, dockShop)
+  }
   if (dockProfile && profileEl) {
     dockProfile.onclick = () => win.toggleWindow(profileEl, dockProfile)
   }
@@ -1540,6 +2262,7 @@ async function init() {
       const key = btn.getAttribute("data-winclose")
       if (key === "navigator") win.hideWindow(lobbyEl, dockNavigator)
       if (key === "inventory") win.hideWindow(inventoryEl, dockInventory)
+      if (key === "shop") win.hideWindow(shopEl, dockShop)
       if (key === "profile") win.hideWindow(profileEl, dockProfile)
       if (key === "createRoom") win.hideWindow(createRoomWinEl)
       if (key === "roomInfo") win.hideWindow(roomInfoEl)

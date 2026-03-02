@@ -87,11 +87,14 @@ function makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey, balance, cr
 }
 
 function makeClaimMarkerEvent({ tools, issuerSk, issuerPubkey, toPubkey, amount, createdAt }) {
+  const day = startOfUtcDay(createdAt)
+  const claimId = `claim:${day}:${toPubkey}`
   const contentObj = {
     type: "nabbo_econ_daily_claim",
     pubkey: toPubkey,
     amount,
-    ts: createdAt
+    ts: createdAt,
+    day
   }
 
   const eventTemplate = {
@@ -101,6 +104,7 @@ function makeClaimMarkerEvent({ tools, issuerSk, issuerPubkey, toPubkey, amount,
       ["t", "nabbo-econ"],
       ["t", "nabbo-claim"],
       ["p", toPubkey],
+      ["d", claimId],
       ["issuer", issuerPubkey]
     ],
     content: JSON.stringify(contentObj),
@@ -156,6 +160,22 @@ export async function onRequestPost({ request, env }) {
 
   const mkPool = () => new tools.SimplePool({ getTimeout: 1800, eoseSubTimeout: 1800 })
 
+  const publishAtLeastOne = async ({ pool, relays, event, timeoutMs }) => {
+    const pubs = pool.publish(relays, event)
+    let t
+    try {
+      await Promise.race([
+        Promise.any(pubs),
+        new Promise((_, rej) => {
+          t = setTimeout(() => rej(new Error("timeout")), timeoutMs)
+        })
+      ])
+      return true
+    } finally {
+      if (t) clearTimeout(t)
+    }
+  }
+
   const withTimeout = async (p, ms) => {
     let t
     try {
@@ -174,16 +194,32 @@ export async function onRequestPost({ request, env }) {
   try {
     const pool = mkPool()
     const since = startOfUtcDay(createdAt)
-    const existing = await withTimeout(
+    const claimId = `claim:${since}:${auth.pubkey}`
+    let existing = await withTimeout(
       pool.get(relays, {
-      kinds: [1],
-      authors: [issuerPubkey],
-      "#t": ["nabbo-claim"],
-      "#p": [auth.pubkey],
-      since
+        kinds: [1],
+        authors: [issuerPubkey],
+        "#t": ["nabbo-claim"],
+        "#p": [auth.pubkey],
+        "#d": [claimId],
+        since
       }),
       2200
     )
+
+    // Back-compat: older claim marker events (before claimId) won't have the d tag.
+    if (!existing) {
+      existing = await withTimeout(
+        pool.get(relays, {
+          kinds: [1],
+          authors: [issuerPubkey],
+          "#t": ["nabbo-claim"],
+          "#p": [auth.pubkey],
+          since
+        }),
+        2200
+      )
+    }
 
     if (existing) {
       return json(429, {
@@ -239,32 +275,15 @@ export async function onRequestPost({ request, env }) {
   try {
     claimMarker = makeClaimMarkerEvent({ tools, issuerSk, issuerPubkey, toPubkey: auth.pubkey, amount: dailyAmount, createdAt })
   } catch {
-    return bad(500, "failed to sign")
+    return bad(500, "failed to sign claim")
   }
 
-  let publishOk = 0
-  let publishFail = 0
   try {
     const pool = mkPool()
-    const pubs = [...pool.publish(relays, claimMarker), ...pool.publish(relays, signed)]
-    let results
-    try {
-      results = await withTimeout(Promise.allSettled(pubs), 2500)
-    } catch {
-      results = null
-    }
-
-    if (Array.isArray(results)) {
-      for (const r of results) {
-        if (r.status === "fulfilled") publishOk += 1
-        else publishFail += 1
-      }
-    } else {
-      // timed out publishing
-      publishFail = pubs.length
-    }
+    await publishAtLeastOne({ pool, relays, event: claimMarker, timeoutMs: 2500 })
+    await publishAtLeastOne({ pool, relays, event: signed, timeoutMs: 2500 })
   } catch {
-    publishFail = relays.length * 2
+    return bad(503, "failed to publish claim")
   }
 
   return json(200, {
@@ -272,7 +291,6 @@ export async function onRequestPost({ request, env }) {
     claim: claimMarker,
     event: signed,
     relays,
-    publish: { ok: publishOk, fail: publishFail },
     balance: { before: currentBalance, after: newBalance, delta: dailyAmount },
     nextClaimAt: endOfUtcDay(createdAt)
   })
