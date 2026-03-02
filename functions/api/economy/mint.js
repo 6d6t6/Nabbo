@@ -17,8 +17,8 @@ function bad(status, message) {
 function requireTools() {
   const tools = globalThis.NostrTools
   if (!tools) throw new Error("NostrTools not available")
-  const { finishEvent, getPublicKey, SimplePool, nip98, verifySignature } = tools
-  if (!finishEvent || !getPublicKey || !SimplePool || !nip98 || !verifySignature) throw new Error("NostrTools missing finishEvent/getPublicKey/SimplePool/nip98/verifySignature")
+  const { finishEvent, getPublicKey, SimplePool, nip98 } = tools
+  if (!finishEvent || !getPublicKey || !SimplePool || !nip98) throw new Error("NostrTools missing finishEvent/getPublicKey/SimplePool/nip98")
   return tools
 }
 
@@ -63,47 +63,86 @@ function getPrice(defId) {
   return typeof p === "number" && isFinite(p) && p >= 0 ? p : null
 }
 
-function parseBalanceFromEvent(ev) {
-  if (!ev || typeof ev !== "object") return null
-  if (ev.kind !== 30078) return null
-  if (!Array.isArray(ev.tags)) return null
-  const d = ev.tags.find((t) => t?.[0] === "d")?.[1]
-  if (d !== "coins") return null
-  let obj
-  try {
-    obj = JSON.parse(ev.content || "{}")
-  } catch {
-    return null
-  }
-  if (obj?.type !== "nabbo_econ_balance") return null
-  if (typeof obj.balance !== "number") return null
-  if (!obj.pubkey || typeof obj.pubkey !== "string") return null
-  return { pubkey: obj.pubkey, balance: obj.balance }
+function startOfUtcDay(tsSeconds) {
+  const ms = tsSeconds * 1000
+  const d = new Date(ms)
+  d.setUTCHours(0, 0, 0, 0)
+  return Math.floor(d.getTime() / 1000)
 }
 
-function makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey, balance, createdAt }) {
-  const contentObj = {
-    type: "nabbo_econ_balance",
-    pubkey: toPubkey,
+function getTag(ev, key) {
+  if (!ev?.tags || !Array.isArray(ev.tags)) return null
+  return ev.tags.find((t) => t?.[0] === key)?.[1] || null
+}
+
+async function computeBalance({ tools, relays, issuerPubkey, toPubkey, dailyAmount, now }) {
+  const mkPool = () => new tools.SimplePool({ getTimeout: 1800, eoseSubTimeout: 1800 })
+
+  const withTimeout = async (p, ms) => {
+    let t
+    try {
+      return await Promise.race([
+        p,
+        new Promise((_, rej) => {
+          t = setTimeout(() => rej(new Error("timeout")), ms)
+        })
+      ])
+    } finally {
+      if (t) clearTimeout(t)
+    }
+  }
+
+  const since = 0
+  const pool = mkPool()
+  const [claims, mints] = await withTimeout(
+    Promise.all([
+      pool.list(relays, [
+        {
+          kinds: [30079],
+          authors: [issuerPubkey],
+          "#t": ["nabbo-claim"],
+          "#p": [toPubkey],
+          since,
+          limit: 5000
+        }
+      ]),
+      pool.list(relays, [
+        {
+          kinds: [1],
+          authors: [issuerPubkey],
+          "#t": ["nabbo-item"],
+          "#p": [toPubkey],
+          since,
+          limit: 5000
+        }
+      ])
+    ]),
+    3200
+  )
+
+  const claimDays = new Set()
+  for (const ev of claims || []) {
+    const d = getTag(ev, "d")
+    if (d && d.startsWith(`claim:${toPubkey}:`)) claimDays.add(d)
+  }
+  const earned = claimDays.size * dailyAmount
+
+  let spent = 0
+  for (const ev of mints || []) {
+    if (getTag(ev, "op") !== "mint") continue
+    const defId = getTag(ev, "def")
+    const price = getPrice(defId)
+    if (price != null) spent += price
+  }
+
+  const balance = Math.max(0, earned - spent)
+  return {
     balance,
-    ts: createdAt
+    earned,
+    spent,
+    claims: claimDays.size,
+    asOf: typeof now === "number" ? now : Math.floor(Date.now() / 1000)
   }
-
-  const eventTemplate = {
-    kind: 30078,
-    created_at: createdAt,
-    tags: [
-      ["t", "nabbo-econ"],
-      ["t", "nabbo-coins"],
-      ["p", toPubkey],
-      ["d", "coins"],
-      ["issuer", issuerPubkey]
-    ],
-    content: JSON.stringify(contentObj),
-    pubkey: issuerPubkey
-  }
-
-  return tools.finishEvent(eventTemplate, issuerSk)
 }
 
 async function requireAuthPubkey({ request, tools }) {
@@ -138,7 +177,6 @@ export async function onRequestPost({ request, env }) {
 
   const toPubkey = (body?.toPubkey || "").trim()
   const defId = (body?.defId || "").trim()
-  const balanceEvent = body?.balanceEvent
 
   if (!/^[0-9a-f]{64}$/i.test(toPubkey)) return bad(400, "invalid toPubkey")
   if (!defId) return bad(400, "missing defId")
@@ -157,20 +195,17 @@ export async function onRequestPost({ request, env }) {
   const createdAt = Math.floor(Date.now() / 1000)
   const issuerPubkey = tools.getPublicKey(issuerSk)
 
-  if (!balanceEvent || typeof balanceEvent !== "object") {
-    return bad(400, "missing balanceEvent")
+  const relays = getRelays(env)
+  const dailyAmount = 100
+  let current
+  try {
+    current = await computeBalance({ tools, relays, issuerPubkey, toPubkey, dailyAmount, now: createdAt })
+  } catch {
+    return bad(503, "relays unavailable")
   }
 
-  const parsedBal = parseBalanceFromEvent(balanceEvent)
-  if (!parsedBal) return bad(400, "invalid balanceEvent")
-  if (parsedBal.pubkey.toLowerCase() !== toPubkey.toLowerCase()) return bad(400, "balanceEvent pubkey mismatch")
-  if (String(balanceEvent.pubkey || "").toLowerCase() !== issuerPubkey.toLowerCase()) return bad(400, "balanceEvent issuer mismatch")
-  if (!tools.verifySignature(balanceEvent)) return bad(400, "balanceEvent signature invalid")
-
-  const currentBalance = parsedBal.balance
-  if (!Number.isFinite(currentBalance) || currentBalance < 0) return bad(400, "invalid balance")
-  if (currentBalance < price) return bad(402, "insufficient coins")
-  const newBalance = currentBalance - price
+  if (typeof current?.balance !== "number") return bad(503, "balance unavailable")
+  if (current.balance < price) return bad(402, "insufficient coins")
 
   const contentObj = {
     type: "nabbo_econ_mint",
@@ -204,19 +239,11 @@ export async function onRequestPost({ request, env }) {
     return bad(500, "failed to sign")
   }
 
-  let balanceSigned
-  try {
-    balanceSigned = makeBalanceEvent({ tools, issuerSk, issuerPubkey, toPubkey, balance: newBalance, createdAt })
-  } catch {
-    return bad(500, "failed to sign balance")
-  }
-
-  const relays = getRelays(env)
   let publishOk = 0
   let publishFail = 0
   try {
     const pool = new tools.SimplePool()
-    const pubs = [...pool.publish(relays, signed), ...pool.publish(relays, balanceSigned)]
+    const pubs = pool.publish(relays, signed)
     const results = await Promise.allSettled(pubs)
     for (const r of results) {
       if (r.status === "fulfilled") publishOk += 1
@@ -226,12 +253,24 @@ export async function onRequestPost({ request, env }) {
     publishFail = relays.length
   }
 
+  if (publishOk === 0) return bad(503, "failed to publish mint")
+
+  let after
+  try {
+    after = await computeBalance({ tools, relays, issuerPubkey, toPubkey, dailyAmount, now: createdAt })
+  } catch {
+    after = null
+  }
+
   return json(null, 200, {
     ok: true,
     event: signed,
-    balanceEvent: balanceSigned,
     relays,
     publish: { ok: publishOk, fail: publishFail },
-    balance: { before: currentBalance, after: newBalance, price }
+    balance: {
+      before: current?.balance ?? null,
+      after: after?.balance ?? null,
+      price
+    }
   })
 }

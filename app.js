@@ -13,12 +13,10 @@ let currentFloorPlan = null
 
 let avatars = {}
 
+ let issuerPubkey = ""
+
  function balanceCacheKey(pubkey) {
    return `nabbo_coins_balance_${String(pubkey || "").toLowerCase()}`
- }
- 
- function balanceEventCacheKey(pubkey) {
-   return `nabbo_coins_balance_event_${String(pubkey || "").toLowerCase()}`
  }
  
  function loadCachedCoins() {
@@ -30,16 +28,6 @@ let avatars = {}
        coinsBalance = bal
      }
    } catch {}
-
-   try {
-     const rawEv = localStorage.getItem(balanceEventCacheKey(myPubkey))
-     if (rawEv) {
-       const ev = JSON.parse(rawEv)
-       if (ev && typeof ev === "object" && typeof ev.content === "string") {
-         latestBalanceEvent = ev
-       }
-     }
-   } catch {}
  }
  
  function saveCachedCoins() {
@@ -47,12 +35,6 @@ let avatars = {}
    try {
      if (typeof coinsBalance === "number" && Number.isFinite(coinsBalance) && coinsBalance >= 0) {
        localStorage.setItem(balanceCacheKey(myPubkey), String(coinsBalance))
-     }
-   } catch {}
-
-   try {
-     if (latestBalanceEvent && typeof latestBalanceEvent === "object") {
-       localStorage.setItem(balanceEventCacheKey(myPubkey), JSON.stringify(latestBalanceEvent))
      }
    } catch {}
  }
@@ -83,6 +65,7 @@ function refreshCoins() {
 
    ;(async () => {
      try {
+       if (!issuerPubkey) return
        const withTimeout = async (p, ms) => {
          let t
          try {
@@ -97,62 +80,50 @@ function refreshCoins() {
          }
        }
 
-       const evs = await withTimeout(
-         list({
-           kinds: [30078],
-           "#t": ["nabbo-coins"],
-           "#p": [myPubkey],
-           "#d": ["coins"],
-           limit: 10
-         }),
+       const [claims, mints] = await withTimeout(
+         Promise.all([
+           list({
+             kinds: [30079],
+             authors: [issuerPubkey],
+             "#t": ["nabbo-claim"],
+             "#p": [myPubkey],
+             limit: 5000
+           }),
+           list({
+             kinds: [1],
+             authors: [issuerPubkey],
+             "#t": ["nabbo-item"],
+             "#p": [myPubkey],
+             limit: 5000
+           })
+         ]),
          2500
        )
 
-       const sorted = (evs || []).slice().sort((a, b) => (b?.created_at || 0) - (a?.created_at || 0))
-       const ev = sorted[0]
-       if (!ev?.content) return
-       let obj
-       try {
-         obj = JSON.parse(ev.content || "{}")
-       } catch {
-         return
+       const dailyAmount = 100
+       const claimDays = new Set()
+       for (const ev of claims || []) {
+         const d = ev?.tags?.find((t) => t?.[0] === "d")?.[1]
+         if (d && typeof d === "string" && d.startsWith(`claim:${myPubkey}:`)) claimDays.add(d)
        }
-       if (obj?.type !== "nabbo_econ_balance") return
-       if (String(obj.pubkey || "").toLowerCase() !== myPubkey.toLowerCase()) return
-       if (typeof obj.balance !== "number" || !Number.isFinite(obj.balance) || obj.balance < 0) return
+       const earned = claimDays.size * dailyAmount
 
-       coinsBalance = obj.balance
-       latestBalanceEvent = ev
+       let spent = 0
+       for (const ev of mints || []) {
+         const op = ev?.tags?.find((t) => t?.[0] === "op")?.[1]
+         if (op !== "mint") continue
+         const defId = ev?.tags?.find((t) => t?.[0] === "def")?.[1]
+         const it = catalog.find((x) => x.defId === defId)
+         if (it?.price) spent += Number(it.price) || 0
+       }
+
+       coinsBalance = Math.max(0, earned - spent)
+       latestBalanceEvent = null
        saveCachedCoins()
        renderCoins()
        renderCatalog()
      } catch {}
    })()
-
-  coinsSub = subscribe(
-    {
-      kinds: [30078],
-      "#t": ["nabbo-coins"],
-      "#p": [myPubkey]
-    },
-    (ev) => {
-      let obj
-      try {
-        obj = JSON.parse(ev?.content || "{}")
-      } catch {
-        return
-      }
-      if (obj?.type !== "nabbo_econ_balance") return
-      if (String(obj.pubkey || "").toLowerCase() !== myPubkey.toLowerCase()) return
-      if (typeof obj.balance !== "number" || !Number.isFinite(obj.balance) || obj.balance < 0) return
-
-      coinsBalance = obj.balance
-      latestBalanceEvent = ev
-      saveCachedCoins()
-      renderCoins()
-      renderCatalog()
-    }
-  )
 }
 
 function renderCatalog() {
@@ -200,10 +171,6 @@ function renderCatalog() {
     }
     btn.onclick = async () => {
       try {
-        if (!latestBalanceEvent) {
-          appendChatLine("no coin balance yet - claim coins first")
-          return
-        }
         const url = new URL("/api/economy/mint", window.location.origin).toString()
         const auth = await getNip98AuthHeader(url, "POST")
         const res = await fetch(url, {
@@ -212,24 +179,20 @@ function renderCatalog() {
             "content-type": "application/json",
             Authorization: auth
           },
-          body: JSON.stringify({ defId: it.defId, toPubkey: myPubkey, balanceEvent: latestBalanceEvent })
+          body: JSON.stringify({ defId: it.defId, toPubkey: myPubkey })
         })
         const out = await res.json().catch(() => null)
         if (!out?.ok) {
           appendChatLine(`mint failed: ${out?.error || res.status}`)
           return
         }
-        if (out?.balanceEvent) {
-          latestBalanceEvent = out.balanceEvent
-          try {
-            const obj = JSON.parse(out.balanceEvent.content || "{}")
-            if (typeof obj.balance === "number") {
-              coinsBalance = obj.balance
-              saveCachedCoins()
-              renderCoins()
-              renderCatalog()
-            }
-          } catch {}
+        if (typeof out?.balance?.after === "number") {
+          coinsBalance = out.balance.after
+          saveCachedCoins()
+          renderCoins()
+          renderCatalog()
+        } else {
+          refreshCoins()
         }
         appendChatLine(`bought: ${it.name}`)
         await new Promise((r) => setTimeout(r, 600))
@@ -1832,6 +1795,15 @@ async function init() {
   await initNostr()
   myPubkey = getPubkey()
 
+  try {
+    const url = new URL("/api/economy/info", window.location.origin).toString()
+    const res = await fetch(url)
+    const out = await res.json().catch(() => null)
+    if (out?.ok && typeof out.issuerPubkey === "string") {
+      issuerPubkey = out.issuerPubkey
+    }
+  } catch {}
+
   myDisplayName = (localStorage.getItem("nabbo_name") || "").trim()
   if (myDisplayName) playerNames[myPubkey] = myDisplayName
   requestNostrProfile(myPubkey)
@@ -1888,23 +1860,16 @@ async function init() {
           if (coinBalanceEl) coinBalanceEl.textContent = `Claim failed: ${msg}`
           return
         }
-        if (out?.event) {
-          latestBalanceEvent = out.event
-          try {
-            const obj = JSON.parse(out.event.content || "{}")
-            if (typeof obj.balance === "number") {
-              coinsBalance = obj.balance
-              renderCoins()
-              renderCatalog()
-            }
-          } catch {}
+
+        if (typeof out?.balance?.balance === "number") {
+          coinsBalance = out.balance.balance
+          saveCachedCoins()
+          renderCoins()
+          renderCatalog()
         }
 
-        if (out?.balance?.delta) {
-          appendChatLine(`daily claim +${out.balance.delta}`)
-        } else {
-          appendChatLine("daily claim ok")
-        }
+        if (out?.claimed === true) appendChatLine("daily claim +100")
+        else appendChatLine("already claimed today")
         await new Promise((r) => setTimeout(r, 600))
         refreshCoins()
       } catch (e) {
