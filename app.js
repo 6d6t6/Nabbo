@@ -1,5 +1,5 @@
 import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js'
-import { initNostr, publish, subscribe, getPubkey } from "./nostr.js"
+import { initNostr, publish, subscribe, getPubkey, getNip98AuthHeader } from "./nostr.js"
 import { createRoom } from './room.js'
 import { createAvatar, updateAvatarPosition } from './avatar.js'
 import { NabboNet, createRoomId, roomIdToCode } from "./webrtc.js"
@@ -12,6 +12,121 @@ let floor
 let currentFloorPlan = null
 
 let avatars = {}
+
+function renderCatalog() {
+  if (!catalogEl) return
+  catalogEl.innerHTML = ""
+  for (const it of catalog) {
+    const row = document.createElement("div")
+    row.className = "item"
+
+    const title = document.createElement("div")
+    title.className = "title"
+    title.textContent = `${it.name} (${it.price})`
+    row.appendChild(title)
+
+    const btn = document.createElement("button")
+    btn.className = "primary"
+    btn.textContent = "Buy"
+    btn.type = "button"
+    btn.onclick = async () => {
+      try {
+        const url = new URL("/api/economy/mint", window.location.origin).toString()
+        const auth = await getNip98AuthHeader(url, "POST")
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            Authorization: auth
+          },
+          body: JSON.stringify({ defId: it.defId, toPubkey: myPubkey })
+        })
+        const out = await res.json().catch(() => null)
+        if (!out?.ok) {
+          appendChatLine(`mint failed: ${out?.error || res.status}`)
+          return
+        }
+        appendChatLine(`bought: ${it.name}`)
+        await new Promise((r) => setTimeout(r, 600))
+        refreshInventory()
+      } catch (e) {
+        appendChatLine("mint failed")
+      }
+    }
+    row.appendChild(btn)
+    catalogEl.appendChild(row)
+  }
+}
+
+function renderInventory() {
+  if (!inventoryListEl) return
+  inventoryListEl.innerHTML = ""
+  const items = Array.from(inventoryItems.values())
+    .filter((x) => x?.toPubkey?.toLowerCase?.() === myPubkey?.toLowerCase?.())
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+
+  if (items.length === 0) {
+    const empty = document.createElement("div")
+    empty.className = "hint"
+    empty.textContent = "No items yet. Buy something from the catalog above."
+    inventoryListEl.appendChild(empty)
+    return
+  }
+
+  for (const it of items) {
+    const row = document.createElement("div")
+    row.className = "item"
+    row.classList.toggle("active", it.instanceId === selectedInstanceId)
+
+    const title = document.createElement("div")
+    title.className = "title"
+    title.textContent = `${it.defId} (${it.instanceId.slice(0, 6)}...)`
+    row.appendChild(title)
+
+    row.onclick = () => {
+      selectedInstanceId = it.instanceId
+      renderInventory()
+    }
+
+    inventoryListEl.appendChild(row)
+  }
+}
+
+function stopInventorySub() {
+  try {
+    inventorySub?.unsub?.()
+  } catch {}
+  inventorySub = null
+}
+
+function refreshInventory() {
+  if (!myPubkey) return
+  stopInventorySub()
+  inventoryItems.clear()
+
+  inventorySub = subscribe(
+    {
+      kinds: [1],
+      "#t": ["nabbo-item"],
+      "#p": [myPubkey],
+      since: Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 30
+    },
+    (ev) => {
+      let obj
+      try {
+        obj = JSON.parse(ev?.content || "{}")
+      } catch {
+        return
+      }
+      if (obj?.type !== "nabbo_econ_mint") return
+      if (!obj.instanceId || !obj.defId || !obj.toPubkey) return
+      inventoryItems.set(obj.instanceId, obj)
+      renderInventory()
+    }
+  )
+
+  renderInventory()
+}
 
 function clampToWalkable(pos) {
   if (!floor?.userData?.tileSet || isTileWalkable(pos)) return pos
@@ -60,6 +175,14 @@ function teardownRoom({ reason = null, showLobby = true } = {}) {
   myAvatar = null
   remoteTargets = {}
 
+  if (placedGroup) {
+    try {
+      scene.remove(placedGroup)
+    } catch {}
+    placedGroup = null
+  }
+  placedItems.clear()
+
   if (chatBubbles.length) {
     for (const b of chatBubbles) {
       try {
@@ -74,6 +197,51 @@ function teardownRoom({ reason = null, showLobby = true } = {}) {
     win.showWindow(lobbyEl, dockNavigator)
     win.focusWindow(lobbyEl)
   }
+}
+
+function ensurePlacedGroup() {
+  if (placedGroup) return
+  placedGroup = new THREE.Group()
+  scene.add(placedGroup)
+}
+
+function colorFromString(s) {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return (h >>> 0) % 0xffffff
+}
+
+function createFurniMesh(defId) {
+  const geom = new THREE.BoxGeometry(0.86, 0.6, 0.86)
+  const mat = new THREE.MeshBasicMaterial({ color: colorFromString(defId || "furni") })
+  const mesh = new THREE.Mesh(geom, mat)
+  mesh.position.y = 0.31
+  return mesh
+}
+
+function placeItemLocal(item) {
+  if (!item?.instanceId || !item?.tile) return
+  if (!floor?.userData?.tileToWorld) return
+
+  ensurePlacedGroup()
+
+  const existing = placedItems.get(item.instanceId)
+  if (existing?.mesh) {
+    try {
+      placedGroup.remove(existing.mesh)
+    } catch {}
+  }
+
+  const w = floor.userData.tileToWorld(item.tile.x, item.tile.z)
+  const mesh = createFurniMesh(item.defId)
+  mesh.position.x = w.x
+  mesh.position.z = w.z
+  placedGroup.add(mesh)
+
+  placedItems.set(item.instanceId, { ...item, mesh })
 }
 
 const win = createWindowManager({ initialZ: 50, bottomMargin: 70 })
@@ -137,6 +305,9 @@ const dockInventory = document.getElementById("dockInventory")
 const dockProfile = document.getElementById("dockProfile")
 
 const inventoryEl = document.getElementById("inventory")
+const catalogEl = document.getElementById("catalog")
+const inventoryListEl = document.getElementById("inventoryList")
+const inventoryRefreshEl = document.getElementById("inventoryRefresh")
 const profileEl = document.getElementById("profile")
 const profileNameEl = document.getElementById("profileName")
 const profileSaveEl = document.getElementById("profileSave")
@@ -151,6 +322,19 @@ const createRoomCancelEl = document.getElementById("createRoomCancel")
 let selectedCreateRoomPlan = ""
 let selectedCreateRoomDoor = null
 let customScrollbarApi = null
+
+const catalog = [
+  { defId: "chair_basic", name: "Chair", price: 10 },
+  { defId: "table_basic", name: "Table", price: 25 },
+  { defId: "plant_basic", name: "Plant", price: 15 }
+]
+
+const inventoryItems = new Map()
+let inventorySub = null
+let selectedInstanceId = ""
+
+const placedItems = new Map()
+let placedGroup = null
 
 function getDefaultPlanCode() {
   return [
@@ -1015,6 +1199,21 @@ function handleNetMessage(fromPubkey, msg) {
     } else {
       setRemoteTarget(who, msg.pos)
     }
+    return
+  }
+
+  if (msg.type === "room_items" && Array.isArray(msg.items)) {
+    for (const it of msg.items) {
+      if (!it?.instanceId || !it?.defId || !it?.tile) continue
+      if (typeof it.tile.x !== "number" || typeof it.tile.z !== "number") continue
+      placeItemLocal(it)
+    }
+    return
+  }
+
+  if (msg.type === "item_placed" && msg.item) {
+    placeItemLocal(msg.item)
+    return
   }
 }
 
@@ -1036,6 +1235,11 @@ function handlePeerState(peer, state) {
         return { pubkey, name: getDisplayName(pubkey), pos: p, tile: toTileCoord(p) }
       })
       net.sendTo(peer, { type: "snapshot", players })
+
+      const items = Array.from(placedItems.values()).map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile }))
+      if (items.length) {
+        net.sendTo(peer, { type: "room_items", items })
+      }
     } else {
       net.sendTo(currentRoom.ownerPubkey, { type: "hello", name: myDisplayName, pos: snappedMyPos, tile: toTileCoord(snappedMyPos) })
     }
@@ -1148,6 +1352,15 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
           net.broadcast(out)
           return
         }
+
+        if (msg.type === "place_item" && msg.item) {
+          const item = msg.item
+          if (item?.instanceId && item?.defId && item?.tile && typeof item.tile.x === "number" && typeof item.tile.z === "number") {
+            placeItemLocal(item)
+            net.broadcast({ type: "item_placed", item })
+          }
+          return
+        }
       }
       handleNetMessage(peer, msg)
     },
@@ -1223,6 +1436,13 @@ async function init() {
   myDisplayName = (localStorage.getItem("nabbo_name") || "").trim()
   if (myDisplayName) playerNames[myPubkey] = myDisplayName
   requestNostrProfile(myPubkey)
+
+  renderCatalog()
+  refreshInventory()
+
+  if (inventoryRefreshEl) {
+    inventoryRefreshEl.onclick = () => refreshInventory()
+  }
 
   setInRoom(false)
 
@@ -1498,6 +1718,19 @@ async function init() {
     const hitObj = hits[0].object
     const tile = hitObj?.userData?.tile
     if (tile && floor?.userData?.tileToWorld) {
+      if (e.shiftKey && selectedInstanceId && net) {
+        const inv = inventoryItems.get(selectedInstanceId)
+        if (inv?.defId) {
+          const item = { instanceId: selectedInstanceId, defId: inv.defId, tile: { x: tile.x, z: tile.z } }
+          if (currentRoom?.isHost) {
+            placeItemLocal(item)
+            net.broadcast({ type: "item_placed", item })
+          } else {
+            net.broadcast({ type: "place_item", item })
+          }
+          return
+        }
+      }
       const w = floor.userData.tileToWorld(tile.x, tile.z)
       const target = { x: w.x, z: w.z }
       if (!isTileWalkable(target)) return
