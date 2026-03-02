@@ -264,6 +264,38 @@ select {
   -webkit-overflow-scrolling: touch;
 }
 
+.shop-layout {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.shop-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 0 8px 0;
+  overflow: auto;
+  max-height: 320px;
+}
+
+.shop-cat {
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.9);
+  border-radius: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.shop-cat.selected {
+  border-color: rgba(120, 140, 255, 0.75);
+  background: rgba(120, 140, 255, 0.18);
+}
+
 .card {
   display: flex;
   flex-direction: column;

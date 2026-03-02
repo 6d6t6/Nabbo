@@ -15,6 +15,8 @@ let avatars = {}
 
  let issuerPubkey = ""
 
+let selectedShopCategory = "All"
+
  function balanceCacheKey(pubkey) {
    return `nabbo_coins_balance_${String(pubkey || "").toLowerCase()}`
  }
@@ -129,7 +131,7 @@ function refreshCoins() {
 function renderCatalog() {
   if (!catalogEl) return
   catalogEl.innerHTML = ""
-  const selectedCat = (shopCategoryEl?.value || "All").trim()
+  const selectedCat = String(selectedShopCategory || "All").trim() || "All"
   const visible = catalog.filter((it) => selectedCat === "All" || (it.category || "Other") === selectedCat)
   for (const it of visible) {
     const card = document.createElement("div")
@@ -173,6 +175,11 @@ function renderCatalog() {
       try {
         const url = new URL("/api/economy/mint", window.location.origin).toString()
         const auth = await getNip98AuthHeader(url, "POST")
+
+        const priceNum = Number(it.price || 0)
+        const hadBalance = typeof coinsBalance === "number" && Number.isFinite(coinsBalance)
+        const optimisticAfter = hadBalance ? Math.max(0, coinsBalance - priceNum) : null
+
         const res = await fetch(url, {
           method: "POST",
           headers: {
@@ -186,17 +193,28 @@ function renderCatalog() {
           appendChatLine(`mint failed: ${out?.error || res.status}`)
           return
         }
-        if (typeof out?.balance?.after === "number") {
-          coinsBalance = out.balance.after
+
+        if (optimisticAfter != null) {
+          coinsBalance = optimisticAfter
           saveCachedCoins()
           renderCoins()
           renderCatalog()
-        } else {
-          refreshCoins()
         }
+
+        if (typeof out?.balance?.after === "number" && Number.isFinite(out.balance.after) && out.balance.after >= 0) {
+          // Avoid overwriting an optimistic balance with a likely-incomplete computed snapshot.
+          if (optimisticAfter == null || Math.abs(out.balance.after - optimisticAfter) <= 0.0001) {
+            coinsBalance = out.balance.after
+            saveCachedCoins()
+            renderCoins()
+            renderCatalog()
+          }
+        }
+
         appendChatLine(`bought: ${it.name}`)
         await new Promise((r) => setTimeout(r, 600))
         refreshInventory()
+        refreshCoins()
       } catch (e) {
         appendChatLine("mint failed")
       }
@@ -570,7 +588,7 @@ const inventoryPlaceEl = document.getElementById("inventoryPlace")
 const inventoryCancelPlaceEl = document.getElementById("inventoryCancelPlace")
 const coinBalanceEl = document.getElementById("coinBalance")
 const claimCoinsEl = document.getElementById("claimCoins")
-const shopCategoryEl = document.getElementById("shopCategory")
+const shopCategoriesEl = document.getElementById("shopCategories")
 const profileEl = document.getElementById("profile")
 const profileNameEl = document.getElementById("profileName")
 const profileSaveEl = document.getElementById("profileSave")
@@ -653,16 +671,23 @@ function ensureGhostForSelected() {
 }
 
 function ensureShopCategories() {
-  if (!shopCategoryEl) return
+  if (!shopCategoriesEl) return
   const cats = Array.from(new Set(catalog.map((x) => x.category || "Other")))
   cats.sort((a, b) => a.localeCompare(b))
   const all = ["All", ...cats]
-  shopCategoryEl.innerHTML = ""
+  shopCategoriesEl.innerHTML = ""
   for (const c of all) {
-    const opt = document.createElement("option")
-    opt.value = c
-    opt.textContent = c
-    shopCategoryEl.appendChild(opt)
+    const btn = document.createElement("button")
+    btn.type = "button"
+    btn.className = "shop-cat"
+    btn.textContent = c
+    btn.classList.toggle("selected", String(selectedShopCategory) === String(c))
+    btn.onclick = () => {
+      selectedShopCategory = c
+      ensureShopCategories()
+      renderCatalog()
+    }
+    shopCategoriesEl.appendChild(btn)
   }
 }
 
@@ -1813,9 +1838,6 @@ async function init() {
   refreshCoins()
 
   ensureShopCategories()
-  if (shopCategoryEl) {
-    shopCategoryEl.onchange = () => renderCatalog()
-  }
 
   setPlacingMode(false)
   if (inventoryPlaceEl) {
