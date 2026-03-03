@@ -977,6 +977,10 @@ let publicRooms = null
 let currentRoom = null
 let net = null
 
+const typingIndicators = new Map()
+let myTypingActive = false
+let myTypingIdleTimer = null
+
 let furniSaveTimer = null
 let loadingRoomState = false
 
@@ -2268,6 +2272,90 @@ function ensureAvatar(pubkey) {
   return avatars[pubkey]
 }
 
+function makeTypingIndicatorSprite() {
+  const c = document.createElement("canvas")
+  c.width = 96
+  c.height = 56
+  const ctx = c.getContext("2d")
+  ctx.clearRect(0, 0, c.width, c.height)
+
+  // bubble
+  ctx.fillStyle = "rgba(255, 255, 255, 0.95)"
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.25)"
+  ctx.lineWidth = 3
+  const r = 16
+  const x = 6
+  const y = 6
+  const w = c.width - 12
+  const h = c.height - 18
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.lineTo(x + w - r, y)
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r)
+  ctx.lineTo(x + w, y + h - r)
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
+  ctx.lineTo(x + r + 10, y + h)
+  ctx.lineTo(x + r - 2, y + h + 10) // tail
+  ctx.lineTo(x + r - 6, y + h)
+  ctx.lineTo(x + r, y + h)
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r)
+  ctx.lineTo(x, y + r)
+  ctx.quadraticCurveTo(x, y, x + r, y)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  // dots
+  ctx.fillStyle = "rgba(20, 22, 26, 0.75)"
+  const cy = y + Math.floor(h * 0.55)
+  const dotR = 4
+  const spacing = 16
+  const cx = x + Math.floor(w / 2)
+  for (let i = -1; i <= 1; i++) {
+    ctx.beginPath()
+    ctx.arc(cx + i * spacing, cy, dotR, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  const tex = new THREE.CanvasTexture(c)
+  tex.magFilter = THREE.NearestFilter
+  tex.minFilter = THREE.NearestFilter
+  tex.needsUpdate = true
+
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false })
+  const spr = new THREE.Sprite(mat)
+  spr.renderOrder = 10
+  spr.scale.set(1.2, 0.7, 1)
+  spr.position.set(0, 3.0, 0)
+  return spr
+}
+
+function setTypingIndicator(pubkey, active) {
+  if (!pubkey) return
+  const av = avatars?.[pubkey]
+  if (!av) return
+
+  let spr = typingIndicators.get(pubkey)
+  if (!spr) {
+    spr = makeTypingIndicatorSprite()
+    spr.visible = false
+    av.add(spr)
+    typingIndicators.set(pubkey, spr)
+  }
+  spr.visible = Boolean(active)
+}
+
+function broadcastMyTyping(active) {
+  if (!net || !myPubkey) return
+  const out = { type: "typing", active: Boolean(active), pubkey: myPubkey }
+  if (currentRoom?.isHost) {
+    handleNetMessage(myPubkey, out)
+    net.broadcast(out)
+  } else {
+    net.broadcast(out)
+  }
+}
+
 function setPoseForPubkey(pubkey, pose) {
   const av = avatars[pubkey]
   if (!av) return
@@ -2401,6 +2489,14 @@ function handleNetMessage(fromPubkey, msg) {
   if (!msg || typeof msg !== "object") return
 
   if (fromPubkey) requestNostrProfile(fromPubkey)
+
+  if (msg.type === "typing") {
+    const who = msg.pubkey ?? fromPubkey
+    if (!who) return
+    ensureAvatar(who)
+    setTypingIndicator(who, Boolean(msg.active))
+    return
+  }
 
   if (msg.type === "host_left") {
     if (currentRoom && !currentRoom.isHost) {
@@ -3134,6 +3230,15 @@ async function init() {
     if (!msg) return
     chatInput.value = ""
 
+    if (myTypingActive) {
+      myTypingActive = false
+      if (myTypingIdleTimer) {
+        clearTimeout(myTypingIdleTimer)
+        myTypingIdleTimer = null
+      }
+      broadcastMyTyping(false)
+    }
+
     if (!net) return
 
     if (currentRoom?.isHost) {
@@ -3150,6 +3255,47 @@ async function init() {
     if (e.shiftKey) return
     e.preventDefault()
     sendBtn.click()
+  })
+
+  const markTypingActivity = () => {
+    if (!currentRoom || !net || !myPubkey) return
+    const hasText = Boolean((chatInput?.value || "").length)
+    const nextActive = hasText
+
+    if (nextActive && !myTypingActive) {
+      myTypingActive = true
+      broadcastMyTyping(true)
+    }
+
+    if (myTypingIdleTimer) {
+      clearTimeout(myTypingIdleTimer)
+      myTypingIdleTimer = null
+    }
+
+    if (myTypingActive) {
+      myTypingIdleTimer = setTimeout(() => {
+        myTypingIdleTimer = null
+        if (!myTypingActive) return
+        myTypingActive = false
+        broadcastMyTyping(false)
+      }, 5_000)
+    }
+
+    if (!nextActive && myTypingActive) {
+      myTypingActive = false
+      broadcastMyTyping(false)
+    }
+  }
+
+  chatInput.addEventListener("input", markTypingActivity)
+  chatInput.addEventListener("blur", () => {
+    if (!myTypingActive) return
+    myTypingActive = false
+    if (myTypingIdleTimer) {
+      clearTimeout(myTypingIdleTimer)
+      myTypingIdleTimer = null
+    }
+    broadcastMyTyping(false)
   })
 
   raycaster = new THREE.Raycaster()
