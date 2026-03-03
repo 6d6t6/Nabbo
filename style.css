@@ -57,6 +57,11 @@ html, body {
   height: 260px;
 }
 
+#wardrobe {
+  width: 320px;
+  height: 360px;
+}
+
 #createRoom {
   width: 420px;
   height: 520px;

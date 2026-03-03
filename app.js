@@ -1,7 +1,7 @@
 import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js'
 import { initNostr, publish, subscribe, list, getPubkey, getNip98AuthHeader } from "./nostr.js"
 import { createRoom } from './room.js'
-import { createAvatar, updateAvatarPosition, setAvatarPose } from './avatar.js'
+import { createAvatar, updateAvatarPosition, setAvatarPose, setAvatarAppearance, quantizeYawTo8 } from './avatar.js'
 import { NabboNet, createRoomId, roomIdToCode } from "./webrtc.js"
 import { createWindowManager } from "./ui/windowManager.js"
 import { createDisconnectModal } from "./ui/disconnectModal.js"
@@ -15,6 +15,95 @@ let raycaster
 let mouse
 
 let avatars = {}
+
+const appearances = {}
+let myAppearance = null
+
+function normalizeAppearance(app) {
+  const a = app && typeof app === "object" ? app : {}
+  return {
+    skin: String(a.skin || "peach"),
+    hair: String(a.hair || "brown_short"),
+    top: String(a.top || "tee_blue"),
+    bottom: String(a.bottom || "pants_gray"),
+    face: String(a.face || "smile")
+  }
+}
+
+const appearanceOptions = {
+  skin: [
+    { id: "peach", label: "Skin: Peach" },
+    { id: "tan", label: "Skin: Tan" },
+    { id: "brown", label: "Skin: Brown" },
+    { id: "dark", label: "Skin: Dark" }
+  ],
+  hair: [
+    { id: "none", label: "Hair: None" },
+    { id: "black", label: "Hair: Black" },
+    { id: "brown_short", label: "Hair: Brown" },
+    { id: "blonde_short", label: "Hair: Blonde" },
+    { id: "red_short", label: "Hair: Red" }
+  ],
+  top: [
+    { id: "tee_blue", label: "Top: Blue Tee" },
+    { id: "tee_red", label: "Top: Red Tee" },
+    { id: "hoodie_green", label: "Top: Green Hoodie" },
+    { id: "jacket_black", label: "Top: Black Jacket" }
+  ],
+  bottom: [
+    { id: "pants_gray", label: "Bottom: Gray Pants" },
+    { id: "pants_blue", label: "Bottom: Blue Pants" },
+    { id: "shorts_black", label: "Bottom: Black Shorts" },
+    { id: "skirt_pink", label: "Bottom: Pink Skirt" }
+  ],
+  face: [
+    { id: "smile", label: "Face: Smile" },
+    { id: "neutral", label: "Face: Neutral" },
+    { id: "sad", label: "Face: Sad" },
+    { id: "surprised", label: "Face: Surprised" }
+  ]
+}
+
+function fillSelect(el, opts) {
+  if (!el) return
+  el.innerHTML = ""
+  for (const o of opts) {
+    const opt = document.createElement("option")
+    opt.value = o.id
+    opt.textContent = o.label
+    el.appendChild(opt)
+  }
+}
+
+function applyAppearanceForPubkey(pubkey, appearance) {
+  const app = normalizeAppearance(appearance)
+  appearances[pubkey] = app
+  const av = avatars[pubkey]
+  if (av) setAvatarAppearance(av, app)
+}
+
+function broadcastMyAppearance() {
+  if (!net || !currentRoom || !myAppearance) return
+  const msg = { type: "appearance", appearance: myAppearance }
+  if (currentRoom.isHost) {
+    const out = { ...msg, pubkey: myPubkey }
+    handleNetMessage(myPubkey, out)
+    net.broadcast(out)
+  } else {
+    net.broadcast(msg)
+  }
+}
+
+function yawFromDir8(dir) {
+  const step = (Math.PI * 2) / 8
+  return (Number(dir || 0) || 0) * step
+}
+
+function getDir8FromYaw(yaw) {
+  const step = (Math.PI * 2) / 8
+  const n = Math.round((yaw || 0) / step)
+  return ((n % 8) + 8) % 8
+}
 
 function shouldIncludePoseInNet() {
   return myPose === "sit"
@@ -876,8 +965,6 @@ let sittingOnInstanceId = ""
 
 let pendingSit = null
 
-let myAppearance = null
-
 let roomAnnounceInterval = null
 
 const PUBLIC_ROOM_TTL_MS = 60_000
@@ -931,6 +1018,7 @@ const dockNavigator = document.getElementById("dockNavigator")
 const dockInventory = document.getElementById("dockInventory")
 const dockShop = document.getElementById("dockShop")
 const dockProfile = document.getElementById("dockProfile")
+const dockWardrobe = document.getElementById("dockWardrobe")
 
 const inventoryEl = document.getElementById("inventory")
 const shopEl = document.getElementById("shop")
@@ -945,6 +1033,13 @@ const shopCategoriesEl = document.getElementById("shopCategories")
 const profileEl = document.getElementById("profile")
 const profileNameEl = document.getElementById("profileName")
 const profileSaveEl = document.getElementById("profileSave")
+const wardrobeEl = document.getElementById("wardrobe")
+const wardrobeSaveEl = document.getElementById("wardrobeSave")
+const avatarSkinEl = document.getElementById("avatarSkin")
+const avatarHairEl = document.getElementById("avatarHair")
+const avatarTopEl = document.getElementById("avatarTop")
+const avatarBottomEl = document.getElementById("avatarBottom")
+const avatarFaceEl = document.getElementById("avatarFace")
 const createRoomWinEl = document.getElementById("createRoom")
 const createRoomNameEl = document.getElementById("createRoomName")
 const createRoomPlanEl = document.getElementById("createRoomPlan")
@@ -2048,13 +2143,11 @@ function stopRoomAnnouncements() {
   }
 }
 
-const appearances = {}
-
 function ensureAvatar(pubkey) {
   if (!avatars[pubkey]) {
     avatars[pubkey] = createAvatar(scene, pubkey)
     const app = appearances[pubkey]
-    if (app) setAvatarAppearance(avatars[pubkey], app)
+    if (app) applyAppearanceForPubkey(pubkey, app)
   }
   return avatars[pubkey]
 }
@@ -2086,6 +2179,7 @@ function standUpIfSitting() {
   if (myPose !== "sit") return
   setMyPose("stand")
   pendingSit = null
+  if (myAvatar) updateAvatarPosition(myAvatar, { x: myAvatar.position.x, z: myAvatar.position.z })
 }
 
 function getPlacedAtTile(tile) {
@@ -2146,7 +2240,7 @@ function faceToward(avatar, from, to) {
   const dx = (to.x || 0) - (from.x || 0)
   const dz = (to.z || 0) - (from.z || 0)
   if (Math.abs(dx) < 0.0001 && Math.abs(dz) < 0.0001) return
-  avatar.rotation.y = Math.atan2(dx, dz)
+  avatar.rotation.y = quantizeYawTo8(Math.atan2(dx, dz))
 }
 
 function isNear(a, b, eps = 0.06) {
@@ -2185,6 +2279,12 @@ function handleNetMessage(fromPubkey, msg) {
     return
   }
 
+  if (msg.type === "appearance" && msg.appearance) {
+    const who = msg.pubkey ?? fromPubkey
+    if (who) applyAppearanceForPubkey(who, msg.appearance)
+    return
+  }
+
   if (msg.type === "snapshot" && Array.isArray(msg.players)) {
     for (const p of msg.players) {
       if (!p?.pubkey || !p?.pos) continue
@@ -2193,8 +2293,11 @@ function handleNetMessage(fromPubkey, msg) {
         maybeApplyNostrName(p.pubkey, p.name)
       }
       requestNostrProfile(p.pubkey)
-      ensureAvatar(p.pubkey)
-      setRemoteTarget(p.pubkey, p.pos)
+      const av = ensureAvatar(p.pubkey)
+      if (p.appearance) applyAppearanceForPubkey(p.pubkey, p.appearance)
+      updateAvatarPosition(av, p.pos)
+      if (typeof p.dir === "number") av.rotation.y = yawFromDir8(p.dir)
+      remoteTargets[p.pubkey] = { pos: { x: p.pos.x, z: p.pos.z }, tile: p.tile || toTileCoord(p.pos) }
       if (p.pose === "sit" && p.sittingOn) {
         setRemoteSitting(p.pubkey, p.sittingOn)
       } else if (p.pose) {
@@ -2225,8 +2328,11 @@ function handleNetMessage(fromPubkey, msg) {
       maybeApplyNostrName(who, msg.name)
     }
     requestNostrProfile(who)
-    ensureAvatar(who)
-    setRemoteTarget(who, msg.pos)
+    const av = ensureAvatar(who)
+    if (msg.appearance) applyAppearanceForPubkey(who, msg.appearance)
+    updateAvatarPosition(av, msg.pos)
+    if (typeof msg.dir === "number") av.rotation.y = yawFromDir8(msg.dir)
+    remoteTargets[who] = { pos: { x: msg.pos.x, z: msg.pos.z }, tile: msg.tile || toTileCoord(msg.pos) }
     if (msg.pose === "sit" && msg.sittingOn) {
       setRemoteSitting(who, msg.sittingOn)
     } else if (msg.pose) {
@@ -2237,19 +2343,25 @@ function handleNetMessage(fromPubkey, msg) {
 
   if (msg.type === "pos") {
     const who = msg.pubkey ?? fromPubkey
-    ensureAvatar(who)
+    const av = ensureAvatar(who)
     if (msg.pose === "sit" && msg.sittingOn) {
       setRemoteSitting(who, msg.sittingOn)
     } else if (msg.pose) {
       setPoseForPubkey(who, msg.pose)
     }
+    if (msg.pos) {
+      updateAvatarPosition(av, msg.pos)
+    }
+    if (typeof msg.dir === "number") {
+      av.rotation.y = yawFromDir8(msg.dir)
+    }
     if (msg.tile && typeof msg.tile.x === "number" && typeof msg.tile.z === "number") {
       if (msg.pos && typeof msg.pos.x === "number" && typeof msg.pos.z === "number") {
-        remoteTargets[who] = { pos: { x: msg.pos.x, z: msg.pos.z }, tile: msg.tile }
+        setRemoteTarget(who, msg.pos)
       } else {
         setRemoteTargetTile(who, msg.tile)
       }
-    } else {
+    } else if (msg.pos && typeof msg.pos.x === "number" && typeof msg.pos.z === "number") {
       setRemoteTarget(who, msg.pos)
     }
     return
@@ -2543,6 +2655,14 @@ async function init() {
   myPubkey = getPubkey()
 
   try {
+    const raw = localStorage.getItem("nabbo_avatar")
+    myAppearance = normalizeAppearance(raw ? JSON.parse(raw) : null)
+  } catch {
+    myAppearance = normalizeAppearance(null)
+  }
+  applyAppearanceForPubkey(myPubkey, myAppearance)
+
+  try {
     const url = new URL("/api/economy/info", window.location.origin).toString()
     const res = await fetch(url)
     const out = await res.json().catch(() => null)
@@ -2640,6 +2760,7 @@ async function init() {
   inventoryEl.dataset.centerOnOpen = "true"
   if (shopEl) shopEl.dataset.centerOnOpen = "true"
   if (profileEl) profileEl.dataset.centerOnOpen = "true"
+  if (wardrobeEl) wardrobeEl.dataset.centerOnOpen = "true"
   if (createRoomWinEl) createRoomWinEl.dataset.centerOnOpen = "true"
   if (roomInfoEl) roomInfoEl.dataset.centerOnOpen = "true"
 
@@ -2647,6 +2768,7 @@ async function init() {
   win.centerWindow(inventoryEl, { force: true })
   if (shopEl) win.centerWindow(shopEl, { force: true })
   if (profileEl) win.centerWindow(profileEl, { force: true })
+  if (wardrobeEl) win.centerWindow(wardrobeEl, { force: true })
   if (createRoomWinEl) win.centerWindow(createRoomWinEl, { force: true })
   if (roomInfoEl) win.centerWindow(roomInfoEl, { force: true })
 
@@ -2704,6 +2826,51 @@ async function init() {
 
   if (profileEl && profileNameEl) {
     profileNameEl.value = myDisplayName
+  }
+
+  fillSelect(avatarSkinEl, appearanceOptions.skin)
+  fillSelect(avatarHairEl, appearanceOptions.hair)
+  fillSelect(avatarTopEl, appearanceOptions.top)
+  fillSelect(avatarBottomEl, appearanceOptions.bottom)
+  fillSelect(avatarFaceEl, appearanceOptions.face)
+
+  const syncWardrobeUi = () => {
+    if (!myAppearance) return
+    if (avatarSkinEl) avatarSkinEl.value = myAppearance.skin
+    if (avatarHairEl) avatarHairEl.value = myAppearance.hair
+    if (avatarTopEl) avatarTopEl.value = myAppearance.top
+    if (avatarBottomEl) avatarBottomEl.value = myAppearance.bottom
+    if (avatarFaceEl) avatarFaceEl.value = myAppearance.face
+  }
+  syncWardrobeUi()
+
+  const onAppearanceChange = () => {
+    myAppearance = normalizeAppearance({
+      skin: avatarSkinEl?.value,
+      hair: avatarHairEl?.value,
+      top: avatarTopEl?.value,
+      bottom: avatarBottomEl?.value,
+      face: avatarFaceEl?.value
+    })
+    applyAppearanceForPubkey(myPubkey, myAppearance)
+    if (myAvatar) setAvatarAppearance(myAvatar, myAppearance)
+  }
+
+  if (avatarSkinEl) avatarSkinEl.onchange = onAppearanceChange
+  if (avatarHairEl) avatarHairEl.onchange = onAppearanceChange
+  if (avatarTopEl) avatarTopEl.onchange = onAppearanceChange
+  if (avatarBottomEl) avatarBottomEl.onchange = onAppearanceChange
+  if (avatarFaceEl) avatarFaceEl.onchange = onAppearanceChange
+
+  if (wardrobeSaveEl) {
+    wardrobeSaveEl.onclick = () => {
+      onAppearanceChange()
+      try {
+        localStorage.setItem("nabbo_avatar", JSON.stringify(myAppearance))
+      } catch {}
+      broadcastMyAppearance()
+      if (wardrobeEl) win.hideWindow(wardrobeEl, dockWardrobe)
+    }
   }
 
   if (profileSaveEl) {
@@ -3026,6 +3193,7 @@ async function init() {
   win.makeDraggable(inventoryEl)
   if (shopEl) win.makeDraggable(shopEl)
   if (profileEl) win.makeDraggable(profileEl)
+  if (wardrobeEl) win.makeDraggable(wardrobeEl)
   if (createRoomWinEl) win.makeDraggable(createRoomWinEl)
   if (roomInfoEl) win.makeDraggable(roomInfoEl)
 
@@ -3033,6 +3201,7 @@ async function init() {
   win.makeResizable(inventoryEl)
   if (shopEl) win.makeResizable(shopEl)
   if (profileEl) win.makeResizable(profileEl)
+  if (wardrobeEl) win.makeResizable(wardrobeEl)
   if (createRoomWinEl) win.makeResizable(createRoomWinEl)
   if (roomInfoEl) win.makeResizable(roomInfoEl)
   win.focusWindow(lobbyEl)
@@ -3047,6 +3216,9 @@ async function init() {
   if (dockProfile && profileEl) {
     dockProfile.onclick = () => win.toggleWindow(profileEl, dockProfile)
   }
+  if (dockWardrobe && wardrobeEl) {
+    dockWardrobe.onclick = () => win.toggleWindow(wardrobeEl, dockWardrobe)
+  }
 
   for (const btn of document.querySelectorAll("[data-winclose]") || []) {
     btn.addEventListener("click", () => {
@@ -3055,6 +3227,7 @@ async function init() {
       if (key === "inventory") win.hideWindow(inventoryEl, dockInventory)
       if (key === "shop") win.hideWindow(shopEl, dockShop)
       if (key === "profile") win.hideWindow(profileEl, dockProfile)
+      if (key === "wardrobe") win.hideWindow(wardrobeEl, dockWardrobe)
       if (key === "createRoom") win.hideWindow(createRoomWinEl)
       if (key === "roomInfo") win.hideWindow(roomInfoEl)
     })
@@ -3095,33 +3268,36 @@ function animate() {
 
       const now = performance.now()
       if (net && now - lastSentPosAt > 100) {
-        lastSentPosAt = now
-        const pos = { x: myAvatar.position.x, z: myAvatar.position.z }
-        const tile = toTileCoord(myTarget)
-        if (currentRoom.isHost) {
-          const out = { type: "pos", pos, tile, pubkey: myPubkey }
-          out.pose = myPose
-          if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
-          net.broadcast(out)
-        } else {
-          const out = { type: "pos", pos, tile }
-          out.pose = myPose
-          if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
-          net.broadcast(out)
+        if (myAvatar && myTarget) {
+          const pos = { x: myAvatar.position.x, z: myAvatar.position.z }
+          const tile = toTileCoord(myTarget)
+          const dir = getDir8FromYaw(myAvatar.rotation.y)
+          if (currentRoom.isHost) {
+            const out = { type: "pos", pos, tile, dir, pubkey: myPubkey }
+            out.pose = myPose
+            if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
+            net.broadcast(out)
+          } else {
+            const out = { type: "pos", pos, tile, dir }
+            out.pose = myPose
+            if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
+            net.broadcast(out)
+          }
         }
       }
     } else if (wasMoving) {
       wasMoving = false
-      if (net) {
+      if (myTarget) {
         const pos = { x: myTarget.x, z: myTarget.z }
         const tile = toTileCoord(myTarget)
+        const dir = myAvatar ? getDir8FromYaw(myAvatar.rotation.y) : 0
         if (currentRoom.isHost) {
-          const out = { type: "pos", pos, tile, pubkey: myPubkey }
+          const out = { type: "pos", pos, tile, dir, pubkey: myPubkey }
           out.pose = myPose
           if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
           net.broadcast(out)
         } else {
-          const out = { type: "pos", pos, tile }
+          const out = { type: "pos", pos, tile, dir }
           out.pose = myPose
           if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
           net.broadcast(out)

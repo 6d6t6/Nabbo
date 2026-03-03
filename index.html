@@ -113,7 +113,22 @@
         <input id="profileName" placeholder="Your name" />
       </div>
 
-      <div class="hint" style="margin-top: 10px; margin-bottom: 6px;">Appearance</div>
+      <div class="row">
+        <button id="profileSave" class="primary">Save</button>
+      </div>
+      <div class="hint">Saved locally on this device.</div>
+    </div>
+  </div>
+
+  <div id="wardrobe" class="window win-hidden" data-window="wardrobe" style="left: 20px; top: 20px;">
+    <div class="titlebar">
+      <div class="title">Wardrobe</div>
+      <button class="winclose" data-winclose="wardrobe" aria-label="Close">
+        <span class="material-symbols-rounded" aria-hidden="true">close</span>
+      </button>
+    </div>
+    <div class="winbody" style="padding: 10px;">
+      <div class="hint" style="margin-bottom: 6px;">Appearance</div>
       <div class="row">
         <select id="avatarSkin"></select>
       </div>
@@ -126,9 +141,11 @@
       <div class="row">
         <select id="avatarBottom"></select>
       </div>
-
       <div class="row">
-        <button id="profileSave" class="primary">Save</button>
+        <select id="avatarFace"></select>
+      </div>
+      <div class="row">
+        <button id="wardrobeSave" class="primary" type="button">Save</button>
       </div>
       <div class="hint">Saved locally on this device.</div>
     </div>
@@ -218,6 +235,10 @@ xx0000xx">
     <button id="dockProfile" class="dockbtn" aria-label="Profile">
       <span class="dock-icon" aria-hidden="true">👤</span>
       <span class="sr-only">Profile</span>
+    </button>
+    <button id="dockWardrobe" class="dockbtn" aria-label="Wardrobe">
+      <span class="dock-icon" aria-hidden="true">👕</span>
+      <span class="sr-only">Wardrobe</span>
     </button>
   </div>
 

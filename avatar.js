@@ -15,8 +15,66 @@ function normalizeAppearance(app) {
     skin: String(a.skin || "peach"),
     hair: String(a.hair || "brown_short"),
     top: String(a.top || "tee_blue"),
-    bottom: String(a.bottom || "pants_gray")
+    bottom: String(a.bottom || "pants_gray"),
+    face: String(a.face || "smile")
   }
+}
+
+const faceTextureCache = new Map()
+
+function makeFaceTexture(faceId) {
+  const key = String(faceId || "smile")
+  if (faceTextureCache.has(key)) return faceTextureCache.get(key)
+
+  const c = document.createElement("canvas")
+  c.width = 32
+  c.height = 32
+  const ctx = c.getContext("2d")
+  ctx.clearRect(0, 0, 32, 32)
+
+  const ink = "#111"
+  ctx.fillStyle = ink
+
+  // eyes
+  ctx.fillRect(10, 11, 4, 4)
+  ctx.fillRect(18, 11, 4, 4)
+
+  // mouths
+  ctx.strokeStyle = ink
+  ctx.lineWidth = 3
+  ctx.lineCap = "round"
+  if (key === "neutral") {
+    ctx.beginPath()
+    ctx.moveTo(11, 21)
+    ctx.lineTo(21, 21)
+    ctx.stroke()
+  } else if (key === "sad") {
+    ctx.beginPath()
+    ctx.arc(16, 25, 7, Math.PI * 1.15, Math.PI * 1.85)
+    ctx.stroke()
+  } else if (key === "surprised") {
+    ctx.beginPath()
+    ctx.arc(16, 22, 4, 0, Math.PI * 2)
+    ctx.stroke()
+  } else {
+    // smile
+    ctx.beginPath()
+    ctx.arc(16, 19, 8, 0.15 * Math.PI, 0.85 * Math.PI)
+    ctx.stroke()
+  }
+
+  const tex = new THREE.CanvasTexture(c)
+  tex.magFilter = THREE.NearestFilter
+  tex.minFilter = THREE.NearestFilter
+  tex.needsUpdate = true
+  faceTextureCache.set(key, tex)
+  return tex
+}
+
+export function quantizeYawTo8(yaw) {
+  const step = (Math.PI * 2) / 8
+  const n = Math.round(yaw / step)
+  return n * step
 }
 
 function colorForAppearanceKey(key) {
@@ -59,6 +117,10 @@ export function createAvatar(scene, pubkey) {
   const head = createPart(new THREE.BoxGeometry(0.62, 0.62, 0.62), 0xf2c6a0)
   head.position.y = 1.62
 
+  const faceMat = new THREE.MeshBasicMaterial({ map: makeFaceTexture("smile"), transparent: true })
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.38, 0.28), faceMat)
+  face.position.set(0, 1.62, 0.32)
+
   const hair = createPart(new THREE.BoxGeometry(0.66, 0.28, 0.66), 0x5a3a24)
   hair.position.y = 1.86
 
@@ -72,18 +134,20 @@ export function createAvatar(scene, pubkey) {
   legs.position.y = 0.30
 
   group.add(head)
+  group.add(face)
   group.add(hair)
   group.add(torso)
   group.add(hips)
   group.add(legs)
 
-  group.userData.parts = { head, hair, torso, hips, legs }
+  group.userData.parts = { head, face, hair, torso, hips, legs }
   group.userData.pose = "stand"
   group.userData.poseYOffset = 0
   group.userData.appearance = normalizeAppearance(null)
 
   group.userData.restPose = {
     head: { pos: head.position.clone(), rot: head.rotation.clone() },
+    face: { pos: face.position.clone(), rot: face.rotation.clone() },
     hair: { pos: hair.position.clone(), rot: hair.rotation.clone() },
     torso: { pos: torso.position.clone(), rot: torso.rotation.clone() },
     hips: { pos: hips.position.clone(), rot: hips.rotation.clone() },
@@ -109,7 +173,7 @@ export function setAvatarPose(avatar, pose) {
   if (!parts || !rest) return
 
   const reset = () => {
-    for (const k of ["head", "hair", "torso", "hips", "legs"]) {
+    for (const k of ["head", "face", "hair", "torso", "hips", "legs"]) {
       const part = parts[k]
       const r = rest[k]
       if (!part || !r) continue
@@ -140,6 +204,12 @@ export function setAvatarAppearance(avatar, appearance) {
 
   const skinColor = colorForAppearanceKey(app.skin)
   if (parts.head?.material) parts.head.material.color.setHex(skinColor)
+
+  if (parts.face?.material) {
+    const t = makeFaceTexture(app.face)
+    parts.face.material.map = t
+    parts.face.material.needsUpdate = true
+  }
 
   const hairKey = app.hair === "none" ? "none" : app.hair
   const hairColor = colorForAppearanceKey(hairKey)
