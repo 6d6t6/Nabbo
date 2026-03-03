@@ -967,6 +967,8 @@ let pendingSit = null
 
 let myPath = null
 
+let lastAnimAt = 0
+
 let roomAnnounceInterval = null
 
 const PUBLIC_ROOM_TTL_MS = 60_000
@@ -2465,8 +2467,16 @@ function handleNetMessage(fromPubkey, msg) {
     } else if (msg.pose) {
       setPoseForPubkey(who, msg.pose)
     }
-    if (msg.pos) {
+    if (msg.pos && (av.userData?.netInit !== true)) {
       updateAvatarPosition(av, msg.pos)
+      if (av.userData) av.userData.netInit = true
+    } else if (msg.pos && typeof msg.pos.x === "number" && typeof msg.pos.z === "number") {
+      const dx0 = msg.pos.x - av.position.x
+      const dz0 = msg.pos.z - av.position.z
+      const drift = Math.sqrt(dx0 * dx0 + dz0 * dz0)
+      if (drift > 1.25) {
+        updateAvatarPosition(av, msg.pos)
+      }
     }
     if (typeof msg.dir === "number") {
       av.rotation.y = yawFromDir8(msg.dir)
@@ -3377,11 +3387,14 @@ async function init() {
 function animate() {
   requestAnimationFrame(animate)
 
+  const now = performance.now()
+  const dt = lastAnimAt ? Math.min(0.05, Math.max(0.005, (now - lastAnimAt) / 1000)) : 1 / 60
+  lastAnimAt = now
+
   updateChatBubbles()
 
   if (myAvatar && currentRoom) {
     const speed = 3.0
-    const dt = 1 / 60
 
     if (myPose === "sit" && sittingOnInstanceId) {
       applySitTransform(myAvatar, sittingOnInstanceId)
@@ -3489,7 +3502,6 @@ function animate() {
     const dist = Math.sqrt(dx * dx + dz * dz)
 
     const speed = 3.0
-    const dt = 1 / 60
     const step = Math.min(dist, speed * dt)
     const nx = dist > 0.0001 ? av.position.x + (dx / dist) * step : av.position.x
     const nz = dist > 0.0001 ? av.position.z + (dz / dist) * step : av.position.z
