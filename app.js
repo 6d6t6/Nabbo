@@ -995,7 +995,7 @@ let pendingLocTimer = null
 let blockedTileSet = new Set()
 
 const furniDefs = {
-  chair_basic: { height: 0.9, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: ["sit"] },
+  chair_basic: { height: 0.9, footprint: { w: 1, d: 1 }, blocksMovement: false, stackable: false, actions: ["sit"] },
   table_basic: { height: 0.8, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: [] },
   plant_basic: { height: 1.1, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: true, stackHeightStep: 0.55, actions: [] }
 }
@@ -2098,27 +2098,16 @@ function trySitOnInstance(instanceId) {
   if (!def?.actions?.includes?.("sit")) return false
   if (!it.tile) return false
 
-  const base = it.tile
-  const candidates = [
-    { x: base.x + 1, z: base.z },
-    { x: base.x - 1, z: base.z },
-    { x: base.x, z: base.z + 1 },
-    { x: base.x, z: base.z - 1 }
-  ]
+  const chairWorld = snapToTileCenter(fromTileCoord(it.tile))
+  if (!isTileWalkable(chairWorld)) return false
 
-  for (const t of candidates) {
-    const w = fromTileCoord(t)
-    if (!isTileWalkable(w)) continue
-    pendingSit = {
-      instanceId,
-      approach: snapToTileCenter(w)
-    }
-    setMyPose("stand")
-    myTarget = pendingSit.approach
-    return true
+  pendingSit = {
+    instanceId,
+    approach: chairWorld
   }
-
-  return false
+  setMyPose("stand")
+  myTarget = pendingSit.approach
+  return true
 }
 
 function applySitTransform(avatar, instanceId) {
@@ -3037,6 +3026,11 @@ function animate() {
     const speed = 3.0
     const dt = 1 / 60
 
+    if (myPose === "sit" && sittingOnInstanceId) {
+      applySitTransform(myAvatar, sittingOnInstanceId)
+      myTarget = { x: myAvatar.position.x, z: myAvatar.position.z }
+    }
+
     const dx = myTarget.x - myAvatar.position.x
     const dz = myTarget.z - myAvatar.position.z
     const dist = Math.sqrt(dx * dx + dz * dz)
@@ -3090,14 +3084,11 @@ function animate() {
       }
     }
 
-    if (pendingSit && myPose !== "sit" && isNear(myTarget, pendingSit.approach)) {
+    if (pendingSit && myPose !== "sit" && isNear({ x: myAvatar.position.x, z: myAvatar.position.z }, pendingSit.approach)) {
       setMyPose("sit", { sittingOn: pendingSit.instanceId })
       applySitTransform(myAvatar, pendingSit.instanceId)
+      myTarget = { x: myAvatar.position.x, z: myAvatar.position.z }
       pendingSit = null
-    }
-
-    if (myPose === "sit" && sittingOnInstanceId) {
-      applySitTransform(myAvatar, sittingOnInstanceId)
     }
   }
 
