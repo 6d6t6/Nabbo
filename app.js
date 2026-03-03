@@ -2648,8 +2648,10 @@ async function init() {
       if (isPlacing) {
         ensureGhostForSelected()
         if (tryPlaceSelectedAtTile(tile)) {
-          setPlacingMode(false)
-          if (inventoryEl) win.showWindow(inventoryEl, dockInventory)
+          if (!placementStackDefId) {
+            setPlacingMode(false)
+            if (inventoryEl) win.showWindow(inventoryEl, dockInventory)
+          }
           return
         }
       }
