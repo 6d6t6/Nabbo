@@ -2172,7 +2172,12 @@ function setMyPose(pose, { sittingOn = "" } = {}) {
   const p = pose === "sit" ? "sit" : "stand"
   myPose = p
   sittingOnInstanceId = p === "sit" ? String(sittingOn || "") : ""
-  if (myAvatar) setAvatarPose(myAvatar, p)
+  if (myAvatar) {
+    setAvatarPose(myAvatar, p)
+    if (p === "stand") {
+      updateAvatarPosition(myAvatar, { x: myAvatar.position.x, z: myAvatar.position.z })
+    }
+  }
 }
 
 function standUpIfSitting() {
@@ -2255,7 +2260,8 @@ function setRemoteTarget(pubkey, pos) {
   const clamped = clampToWalkable(snapped)
   remoteTargets[pubkey] = {
     pos: { x: clamped.x, z: clamped.z },
-    tile: toTileCoord(clamped)
+    tile: toTileCoord(clamped),
+    dir: remoteTargets?.[pubkey]?.dir
   }
 }
 
@@ -2263,7 +2269,8 @@ function setRemoteTargetTile(pubkey, tile) {
   const clamped = clampToWalkable(fromTileCoord(tile))
   remoteTargets[pubkey] = {
     pos: { x: clamped.x, z: clamped.z },
-    tile: toTileCoord(clamped)
+    tile: toTileCoord(clamped),
+    dir: remoteTargets?.[pubkey]?.dir
   }
 }
 
@@ -2297,7 +2304,7 @@ function handleNetMessage(fromPubkey, msg) {
       if (p.appearance) applyAppearanceForPubkey(p.pubkey, p.appearance)
       updateAvatarPosition(av, p.pos)
       if (typeof p.dir === "number") av.rotation.y = yawFromDir8(p.dir)
-      remoteTargets[p.pubkey] = { pos: { x: p.pos.x, z: p.pos.z }, tile: p.tile || toTileCoord(p.pos) }
+      remoteTargets[p.pubkey] = { pos: { x: p.pos.x, z: p.pos.z }, tile: p.tile || toTileCoord(p.pos), dir: typeof p.dir === "number" ? p.dir : undefined }
       if (p.pose === "sit" && p.sittingOn) {
         setRemoteSitting(p.pubkey, p.sittingOn)
       } else if (p.pose) {
@@ -2332,7 +2339,7 @@ function handleNetMessage(fromPubkey, msg) {
     if (msg.appearance) applyAppearanceForPubkey(who, msg.appearance)
     updateAvatarPosition(av, msg.pos)
     if (typeof msg.dir === "number") av.rotation.y = yawFromDir8(msg.dir)
-    remoteTargets[who] = { pos: { x: msg.pos.x, z: msg.pos.z }, tile: msg.tile || toTileCoord(msg.pos) }
+    remoteTargets[who] = { pos: { x: msg.pos.x, z: msg.pos.z }, tile: msg.tile || toTileCoord(msg.pos), dir: typeof msg.dir === "number" ? msg.dir : undefined }
     if (msg.pose === "sit" && msg.sittingOn) {
       setRemoteSitting(who, msg.sittingOn)
     } else if (msg.pose) {
@@ -2354,6 +2361,7 @@ function handleNetMessage(fromPubkey, msg) {
     }
     if (typeof msg.dir === "number") {
       av.rotation.y = yawFromDir8(msg.dir)
+      if (remoteTargets[who]) remoteTargets[who].dir = msg.dir
     }
     if (msg.tile && typeof msg.tile.x === "number" && typeof msg.tile.z === "number") {
       if (msg.pos && typeof msg.pos.x === "number" && typeof msg.pos.z === "number") {
@@ -2418,7 +2426,14 @@ function handlePeerState(peer, state) {
       const players = Object.keys(avatars).map((pubkey) => {
         const av = avatars[pubkey]
         const p = snapToTileCenter({ x: av.position.x, z: av.position.z })
-        const out = { pubkey, name: getDisplayName(pubkey), pos: p, tile: toTileCoord(p), pose: av?.userData?.pose || "stand" }
+        const out = {
+          pubkey,
+          name: getDisplayName(pubkey),
+          pos: p,
+          tile: toTileCoord(p),
+          pose: av?.userData?.pose || "stand",
+          dir: getDir8FromYaw(av?.rotation?.y || 0)
+        }
         if (out.pose === "sit" && av?.userData?.sittingOnInstanceId) out.sittingOn = av.userData.sittingOnInstanceId
         return out
       })
@@ -2435,7 +2450,13 @@ function handlePeerState(peer, state) {
         net.sendTo(peer, { type: "room_items", items })
       }
     } else {
-      const hello = { type: "hello", name: myDisplayName, pos: snappedMyPos, tile: toTileCoord(snappedMyPos) }
+      const hello = {
+        type: "hello",
+        name: myDisplayName,
+        pos: snappedMyPos,
+        tile: toTileCoord(snappedMyPos),
+        dir: myAvatar ? getDir8FromYaw(myAvatar.rotation.y) : 0
+      }
       hello.pose = myPose
       if (shouldIncludeSittingOnInNet()) hello.sittingOn = sittingOnInstanceId
       net.sendTo(currentRoom.ownerPubkey, hello)
@@ -2560,7 +2581,8 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
               name: getDisplayName(pubkey),
               pos,
               tile: toTileCoord(pos),
-              pose: av?.userData?.pose || "stand"
+              pose: av?.userData?.pose || "stand",
+              dir: getDir8FromYaw(av?.rotation?.y || 0)
             }
             if (p.pose === "sit" && av?.userData?.sittingOnInstanceId) p.sittingOn = av.userData.sittingOnInstanceId
             const app = appearances[pubkey]
@@ -3335,7 +3357,11 @@ function animate() {
     const nx = av.position.x + dx * lerp
     const nz = av.position.z + dz * lerp
 
-    faceToward(av, { x: av.position.x, z: av.position.z }, { x: tx, z: tz })
+    if (typeof target?.dir === "number") {
+      av.rotation.y = yawFromDir8(target.dir)
+    } else {
+      faceToward(av, { x: av.position.x, z: av.position.z }, { x: tx, z: tz })
+    }
 
     const finalTile = target.tile
     if (finalTile && typeof finalTile.x === "number" && typeof finalTile.z === "number") {
