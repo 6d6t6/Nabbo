@@ -111,6 +111,7 @@ function refreshCoins() {
          const d = ev?.tags?.find((t) => t?.[0] === "d")?.[1]
          if (d && typeof d === "string" && d.startsWith(`claim:${myPubkey}:`)) claimDays.add(d)
        }
+       lastClaimsSet = claimDays
        const earned = claimDays.size * dailyAmount
 
        let spent = 0
@@ -127,8 +128,38 @@ function refreshCoins() {
        saveCachedCoins()
        renderCoins()
        renderCatalog()
+       updateClaimUi()
      } catch {}
    })()
+}
+
+function updateClaimUi() {
+  if (!claimCoinsEl) return
+  if (claimCountdownTimer) {
+    clearInterval(claimCountdownTimer)
+    claimCountdownTimer = null
+  }
+
+  const dayStart = startOfUtcDaySeconds(Date.now())
+  const todayKey = `claim:${myPubkey}:${dayStart}`
+  const hasClaimed = Boolean(lastClaimsSet && lastClaimsSet.has(todayKey))
+
+  const tick = () => {
+    const now = Math.floor(Date.now() / 1000)
+    const resetAt = endOfUtcDaySeconds(Date.now())
+    const left = resetAt - now
+    claimCoinsEl.disabled = hasClaimed
+    if (hasClaimed) {
+      claimCoinsEl.textContent = `Daily Claim (${formatHMS(left)})`
+    } else {
+      claimCoinsEl.textContent = "Daily Claim"
+    }
+  }
+
+  tick()
+  if (hasClaimed) {
+    claimCountdownTimer = setInterval(tick, 1000)
+  }
 }
 
 function renderCatalog() {
@@ -143,10 +174,7 @@ function renderCatalog() {
 
     const thumb = document.createElement("div")
     thumb.className = "thumb"
-    const sq = document.createElement("div")
-    sq.className = "thumb-square"
-    sq.style.background = colorFromId(it.defId)
-    thumb.appendChild(sq)
+    thumb.appendChild(makeThumbEl(it.defId))
     card.appendChild(thumb)
 
     const title = document.createElement("div")
@@ -266,10 +294,7 @@ function renderInventory() {
 
     const thumb = document.createElement("div")
     thumb.className = "thumb"
-    const sq = document.createElement("div")
-    sq.className = "thumb-square"
-    sq.style.background = colorFromId(defId)
-    thumb.appendChild(sq)
+    thumb.appendChild(makeThumbEl(defId))
     card.appendChild(thumb)
 
     if (arr.length > 1) {
@@ -413,6 +438,88 @@ function ensurePlacedGroup() {
   scene.add(placedGroup)
 }
 
+function removePlacedLocal(instanceId) {
+  const existing = placedItems.get(instanceId)
+  if (!existing) return
+  if (existing.mesh && placedGroup) {
+    try {
+      placedGroup.remove(existing.mesh)
+    } catch {}
+  }
+  placedItems.delete(instanceId)
+  renderInventory()
+  if (currentRoom?.isHost && !loadingRoomState) {
+    scheduleSaveRoomFurni()
+  }
+}
+
+function updatePlacedLocal({ instanceId, tile, rot }) {
+  const existing = placedItems.get(instanceId)
+  if (!existing) return
+  const next = { ...existing }
+  if (tile && typeof tile.x === "number" && typeof tile.z === "number") {
+    next.tile = { x: tile.x, z: tile.z }
+    if (floor?.userData?.tileToWorld && existing.mesh) {
+      const w = floor.userData.tileToWorld(tile.x, tile.z)
+      existing.mesh.position.x = w.x
+      existing.mesh.position.z = w.z
+    }
+  }
+  if (typeof rot === "number" && Number.isFinite(rot)) {
+    next.rot = rot
+    if (existing.mesh) existing.mesh.rotation.y = rot * (Math.PI / 2)
+  }
+  placedItems.set(instanceId, next)
+  if (currentRoom?.isHost && !loadingRoomState) {
+    scheduleSaveRoomFurni()
+  }
+}
+
+function pickPlacedInstanceFromEvent(e) {
+  if (!raycaster || !mouse || !camera) return ""
+  if (!placedGroup) return ""
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1
+  raycaster.setFromCamera(mouse, camera)
+  const hits = raycaster.intersectObject(placedGroup, true)
+  const id = hits?.[0]?.object?.userData?.instanceId
+  return typeof id === "string" ? id : ""
+}
+
+function sendRotateItem(instanceId) {
+  if (!instanceId || !net) return
+  const it = placedItems.get(instanceId)
+  if (!it) return
+  const nextRot = ((Number(it.rot || 0) || 0) + 1) % 4
+  if (currentRoom?.isHost) {
+    updatePlacedLocal({ instanceId, rot: nextRot })
+    net.broadcast({ type: "item_rotated", item: { instanceId, rot: nextRot } })
+  } else {
+    net.broadcast({ type: "rotate_item", item: { instanceId, rot: nextRot } })
+  }
+}
+
+function sendPickupItem(instanceId) {
+  if (!instanceId || !net) return
+  if (currentRoom?.isHost) {
+    removePlacedLocal(instanceId)
+    net.broadcast({ type: "item_picked_up", instanceId })
+  } else {
+    net.broadcast({ type: "pickup_item", instanceId })
+  }
+}
+
+function sendMoveItem(instanceId, tile) {
+  if (!instanceId || !net) return
+  if (!tile || typeof tile.x !== "number" || typeof tile.z !== "number") return
+  if (currentRoom?.isHost) {
+    updatePlacedLocal({ instanceId, tile })
+    net.broadcast({ type: "item_moved", item: { instanceId, tile } })
+  } else {
+    net.broadcast({ type: "move_item", item: { instanceId, tile } })
+  }
+}
+
 function colorFromString(s) {
   let h = 2166136261
   for (let i = 0; i < s.length; i++) {
@@ -515,9 +622,19 @@ function placeItemLocal(item) {
   const mesh = createFurniMesh(item.defId)
   mesh.position.x = w.x
   mesh.position.z = w.z
+  const rot = Number(item.rot || 0) || 0
+  mesh.rotation.y = rot * (Math.PI / 2)
+
+  mesh.traverse((o) => {
+    if (o && typeof o === "object") {
+      o.userData = o.userData || {}
+      o.userData.instanceId = item.instanceId
+    }
+  })
+
   placedGroup.add(mesh)
 
-  placedItems.set(item.instanceId, { ...item, mesh })
+  placedItems.set(item.instanceId, { ...item, rot, mesh })
   renderInventory()
 
   if (currentRoom?.isHost && !loadingRoomState) {
@@ -551,7 +668,8 @@ async function saveRoomFurni() {
   const items = Array.from(placedItems.values()).map((it) => ({
     instanceId: it.instanceId,
     defId: it.defId,
-    tile: it.tile
+    tile: it.tile,
+    rot: it.rot || 0
   }))
   const contentObj = {
     type: "nabbo_room_state",
@@ -583,7 +701,7 @@ async function loadRoomFurni(roomId) {
   if (!Array.isArray(obj.items)) return []
   return obj.items
     .filter((it) => it?.instanceId && it?.defId && it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number")
-    .map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile }))
+    .map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile, rot: it.rot || 0 }))
 }
 
 const win = createWindowManager({ initialZ: 50, bottomMargin: 70 })
@@ -694,8 +812,108 @@ let isPlacing = false
 let ghostItem = null
 let ghostInstanceId = ""
 
+let placementStackDefId = ""
+
+let thumbRenderer = null
+let thumbCanvas = null
+let thumbCache = new Map()
+
+let lastClaimsSet = null
+
+let claimCountdownTimer = null
+
+let movingInstanceId = ""
+let movingStartTile = null
+
 function colorFromId(id) {
   return `#${colorFromString(String(id || "")).toString(16).padStart(6, "0")}`
+}
+
+function startOfUtcDaySeconds(tsMs = Date.now()) {
+  const d = new Date(tsMs)
+  d.setUTCHours(0, 0, 0, 0)
+  return Math.floor(d.getTime() / 1000)
+}
+
+function endOfUtcDaySeconds(tsMs = Date.now()) {
+  return startOfUtcDaySeconds(tsMs) + 24 * 60 * 60
+}
+
+function formatHMS(totalSeconds) {
+  const s = Math.max(0, Math.floor(totalSeconds || 0))
+  const hh = String(Math.floor(s / 3600)).padStart(2, "0")
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0")
+  const ss = String(s % 60).padStart(2, "0")
+  return `${hh}:${mm}:${ss}`
+}
+
+function ensureThumbRenderer(size) {
+  const s = Math.max(32, Math.floor(size || 64))
+  if (!thumbCanvas) {
+    thumbCanvas = document.createElement("canvas")
+  }
+  if (thumbCanvas.width !== s || thumbCanvas.height !== s) {
+    thumbCanvas.width = s
+    thumbCanvas.height = s
+  }
+  if (!thumbRenderer) {
+    thumbRenderer = new THREE.WebGLRenderer({
+      canvas: thumbCanvas,
+      alpha: true,
+      antialias: true,
+      preserveDrawingBuffer: true
+    })
+  }
+  thumbRenderer.setSize(s, s, false)
+  thumbRenderer.setPixelRatio(1)
+  return { renderer: thumbRenderer, canvas: thumbCanvas, size: s }
+}
+
+function getFurniThumbUrl(defId, size = 64) {
+  const key = `${String(defId || "")}:${Math.floor(size)}`
+  const cached = thumbCache.get(key)
+  if (cached) return cached
+
+  try {
+    const { renderer, canvas, size: s } = ensureThumbRenderer(size)
+    const sceneT = new THREE.Scene()
+    const cam = new THREE.PerspectiveCamera(40, 1, 0.01, 20)
+    cam.position.set(1.7, 1.7, 1.7)
+    cam.lookAt(0, 0.4, 0)
+
+    const mesh = createFurniMesh(defId)
+    const box = new THREE.Box3().setFromObject(mesh)
+    const sizeV = new THREE.Vector3()
+    const center = new THREE.Vector3()
+    box.getSize(sizeV)
+    box.getCenter(center)
+
+    const maxDim = Math.max(sizeV.x, sizeV.y, sizeV.z) || 1
+    const scale = 1.1 / maxDim
+    mesh.scale.setScalar(scale)
+    mesh.position.sub(center.multiplyScalar(scale))
+
+    mesh.rotation.y = Math.PI / 4
+    sceneT.add(mesh)
+
+    renderer.setClearColor(0x000000, 0)
+    renderer.render(sceneT, cam)
+    const url = canvas.toDataURL("image/png")
+    thumbCache.set(key, url)
+    return url
+  } catch {
+    return ""
+  }
+}
+
+function makeThumbEl(defId) {
+  const img = document.createElement("img")
+  img.className = "thumb-img"
+  img.alt = ""
+  img.draggable = false
+  const url = getFurniThumbUrl(defId, 64)
+  if (url) img.src = url
+  return img
 }
 
 function getSelectedPlacementDefId() {
@@ -710,6 +928,7 @@ function setPlacingMode(on) {
   if (inventoryCancelPlaceEl) inventoryCancelPlaceEl.disabled = !isPlacing
 
   if (!isPlacing) {
+    placementStackDefId = ""
     ghostInstanceId = ""
     if (ghostItem) {
       try {
@@ -796,12 +1015,30 @@ function tryPlaceSelectedAtTile(tile) {
   if (!selectedInstanceId || !net) return false
   const inv = inventoryItems.get(selectedInstanceId)
   if (!inv?.defId) return false
-  const item = { instanceId: selectedInstanceId, defId: inv.defId, tile: { x: tile.x, z: tile.z } }
+  const item = { instanceId: selectedInstanceId, defId: inv.defId, tile: { x: tile.x, z: tile.z }, rot: 0 }
   if (currentRoom?.isHost) {
     placeItemLocal(item)
     net.broadcast({ type: "item_placed", item })
   } else {
     net.broadcast({ type: "place_item", item })
+  }
+
+  if (placementStackDefId && placementStackDefId === inv.defId) {
+    const placedIds = new Set(Array.from(placedItems.keys()))
+    const next = Array.from(inventoryItems.values())
+      .filter((x) => x?.toPubkey?.toLowerCase?.() === myPubkey?.toLowerCase?.())
+      .filter((x) => x?.defId === placementStackDefId)
+      .filter((x) => x?.instanceId && !placedIds.has(x.instanceId))
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0))[0]
+
+    if (next?.instanceId) {
+      selectedInstanceId = next.instanceId
+      ensureGhostForSelected()
+      renderInventory()
+    } else {
+      setPlacingMode(false)
+      if (inventoryEl) win.showWindow(inventoryEl, dockInventory)
+    }
   }
   return true
 }
@@ -1688,6 +1925,27 @@ function handleNetMessage(fromPubkey, msg) {
     placeItemLocal(msg.item)
     return
   }
+
+  if (msg.type === "item_moved" && msg.item) {
+    const it = msg.item
+    if (it?.instanceId && it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number") {
+      updatePlacedLocal({ instanceId: it.instanceId, tile: it.tile })
+    }
+    return
+  }
+
+  if (msg.type === "item_rotated" && msg.item) {
+    const it = msg.item
+    if (it?.instanceId && typeof it.rot === "number") {
+      updatePlacedLocal({ instanceId: it.instanceId, rot: it.rot })
+    }
+    return
+  }
+
+  if (msg.type === "item_picked_up" && msg.instanceId) {
+    removePlacedLocal(msg.instanceId)
+    return
+  }
 }
 
 function handlePeerState(peer, state) {
@@ -1709,7 +1967,7 @@ function handlePeerState(peer, state) {
       })
       net.sendTo(peer, { type: "snapshot", players })
 
-      const items = Array.from(placedItems.values()).map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile }))
+      const items = Array.from(placedItems.values()).map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile, rot: it.rot || 0 }))
       if (items.length) {
         net.sendTo(peer, { type: "room_items", items })
       }
@@ -1848,6 +2106,30 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
           }
           return
         }
+
+        if (msg.type === "move_item" && msg.item) {
+          const it = msg.item
+          if (it?.instanceId && it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number") {
+            updatePlacedLocal({ instanceId: it.instanceId, tile: it.tile })
+            net.broadcast({ type: "item_moved", item: { instanceId: it.instanceId, tile: it.tile } })
+          }
+          return
+        }
+
+        if (msg.type === "rotate_item" && msg.item) {
+          const it = msg.item
+          if (it?.instanceId && typeof it.rot === "number") {
+            updatePlacedLocal({ instanceId: it.instanceId, rot: it.rot })
+            net.broadcast({ type: "item_rotated", item: { instanceId: it.instanceId, rot: it.rot } })
+          }
+          return
+        }
+
+        if (msg.type === "pickup_item" && msg.instanceId) {
+          removePlacedLocal(msg.instanceId)
+          net.broadcast({ type: "item_picked_up", instanceId: msg.instanceId })
+          return
+        }
       }
       handleNetMessage(peer, msg)
     },
@@ -1936,6 +2218,7 @@ async function init() {
   renderCatalog()
   refreshInventory()
   refreshCoins()
+  updateClaimUi()
 
   ensureShopCategories()
 
@@ -1946,6 +2229,7 @@ async function init() {
         appendChatLine("select an item to place")
         return
       }
+      placementStackDefId = getSelectedPlacementDefId() || ""
       setPlacingMode(true)
       if (inventoryEl) win.hideWindow(inventoryEl, dockInventory)
     }
@@ -1959,7 +2243,6 @@ async function init() {
 
   if (claimCoinsEl) {
     claimCoinsEl.onclick = async () => {
-      const prevText = claimCoinsEl.textContent
       claimCoinsEl.disabled = true
       claimCoinsEl.textContent = "Claiming…"
       try {
@@ -1999,8 +2282,7 @@ async function init() {
         appendChatLine(msg)
         if (coinBalanceEl) coinBalanceEl.textContent = msg
       } finally {
-        claimCoinsEl.disabled = false
-        claimCoinsEl.textContent = prevText || "Daily Claim"
+        updateClaimUi()
       }
     }
   }
@@ -2241,6 +2523,17 @@ async function init() {
     if (document.body.classList.contains("dragging")) return
     if (shouldIgnoreScenePointer(e.target)) return
 
+    if (e.altKey && !isPlacing) {
+      const id = pickPlacedInstanceFromEvent(e)
+      if (id) {
+        movingInstanceId = id
+        movingStartTile = placedItems.get(id)?.tile || null
+        canvasEl.setPointerCapture(e.pointerId)
+        e.preventDefault()
+        return
+      }
+    }
+
     isPanning = true
     panDidMove = false
     panStart = { x: e.clientX, y: e.clientY }
@@ -2249,6 +2542,19 @@ async function init() {
   })
 
   canvasEl.addEventListener("pointermove", (e) => {
+    if (movingInstanceId) {
+      if (!floor?.userData?.tiles) return
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1
+      raycaster.setFromCamera(mouse, camera)
+      const hits = raycaster.intersectObject(floor.userData.tiles, true)
+      const tile = hits?.[0]?.object?.userData?.tile
+      if (tile && typeof tile.x === "number" && typeof tile.z === "number") {
+        updatePlacedLocal({ instanceId: movingInstanceId, tile: { x: tile.x, z: tile.z } })
+      }
+      e.preventDefault()
+      return
+    }
     if (!isPanning) return
 
     const dx = e.clientX - panStart.x
@@ -2272,6 +2578,18 @@ async function init() {
   })
 
   const endPan = () => {
+    if (movingInstanceId) {
+      const id = movingInstanceId
+      movingInstanceId = ""
+      const t = placedItems.get(id)?.tile
+      if (t && typeof t.x === "number" && typeof t.z === "number") {
+        sendMoveItem(id, t)
+      } else if (movingStartTile) {
+        updatePlacedLocal({ instanceId: id, tile: movingStartTile })
+      }
+      movingStartTile = null
+      return
+    }
     if (!isPanning) return
     isPanning = false
     if (panDidMove) suppressClickUntil = Date.now() + 250
@@ -2294,6 +2612,20 @@ async function init() {
       if (t.closest(".dock")) return
       if (t.closest("#ui")) return
       if (t.closest(".chatlog")) return
+    }
+
+    if (!isPlacing) {
+      const id = pickPlacedInstanceFromEvent(e)
+      if (id) {
+        if (e.shiftKey) {
+          sendRotateItem(id)
+          return
+        }
+        if (e.ctrlKey || e.metaKey) {
+          sendPickupItem(id)
+          return
+        }
+      }
     }
 
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1
