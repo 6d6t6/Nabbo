@@ -3311,11 +3311,12 @@ async function init() {
       }
 
       pendingSit = null
+      const wasSittingBefore = myPose === "sit" && Boolean(sittingOnInstanceId)
       standUpIfSitting()
       const w = floor.userData.tileToWorld(tile.x, tile.z)
       const target = { x: w.x, z: w.z }
       const startTile = toTileCoord({ x: myAvatar?.position?.x ?? 0, z: myAvatar?.position?.z ?? 0 })
-      const allowStartBlocked = myPose === "sit" && Boolean(sittingOnInstanceId)
+      const allowStartBlocked = wasSittingBefore
       const path = findPathAStar(startTile, tile, { allowGoalBlocked: false, allowStartBlocked })
       if (!path || path.length === 0) return
       myPath = path
@@ -3329,8 +3330,8 @@ async function init() {
     const target = snapToTileCenter({ x: p.x, z: p.z })
     const goalTile = toTileCoord(target)
     const startTile = toTileCoord({ x: myAvatar?.position?.x ?? 0, z: myAvatar?.position?.z ?? 0 })
-    const allowStartBlocked = myPose === "sit" && Boolean(sittingOnInstanceId)
-    const path = findPathAStar(startTile, goalTile, { allowGoalBlocked: false, allowStartBlocked })
+    const wasSittingBefore = myPose === "sit" && Boolean(sittingOnInstanceId)
+    const path = findPathAStar(startTile, goalTile, { allowGoalBlocked: false, allowStartBlocked: wasSittingBefore })
     if (!path || path.length === 0) return
     pendingSit = null
     standUpIfSitting()
