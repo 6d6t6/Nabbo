@@ -44,6 +44,13 @@ export function createPublicRooms({ subscribe, ttlMs, onChange }) {
       return { x: Math.floor(x), z: Math.floor(z) }
     })()
 
+    const entryDir = (() => {
+      const raw = data.entryDir
+      const n = raw == null ? 2 : Number(raw)
+      if (!Number.isFinite(n)) return 2
+      return n
+    })()
+
     const createdAtSec = typeof event?.created_at === "number" ? event.created_at : null
     if (createdAtSec) {
       const ageMs = Date.now() - createdAtSec * 1000
@@ -61,6 +68,7 @@ export function createPublicRooms({ subscribe, ttlMs, onChange }) {
       count: typeof data.count === "number" ? data.count : null,
       plan: typeof data.plan === "string" ? data.plan : null,
       door,
+      entryDir,
       ownerPubkey: data.ownerPubkey,
       seenAt
     })

@@ -579,6 +579,23 @@ function teardownRoom({ reason = null, showLobby = true } = {}) {
     chatBubbles = []
   }
 
+  if (typingBubbles.size) {
+    for (const b of typingBubbles.values()) {
+      try {
+        b.el.remove()
+      } catch {}
+    }
+    typingBubbles.clear()
+  }
+
+  if (typingStopTimer) {
+    clearTimeout(typingStopTimer)
+    typingStopTimer = null
+  }
+  myTyping = false
+  myLastTypingInputAt = 0
+  lastTypingBroadcastAt = 0
+
   setInRoom(false)
   updateFurniAccessUi()
   if (showLobby) {
@@ -683,69 +700,6 @@ async function flushItemLocationPublishes() {
     } catch {}
   }
   renderInventory()
-}
-
-function pickPlacedInstanceFromEvent(e) {
-  if (!raycaster || !mouse || !camera) return ""
-  if (!placedGroup) return ""
-  mouse.x = (e.clientX / window.innerWidth) * 2 - 1
-  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1
-  raycaster.setFromCamera(mouse, camera)
-  const hits = raycaster.intersectObject(placedGroup, true)
-  const id = hits?.[0]?.object?.userData?.instanceId
-  return typeof id === "string" ? id : ""
-}
-
-function sendRotateItem(instanceId) {
-  if (!instanceId || !net) return
-  if (!currentRoom?.isHost) return
-  const it = placedItems.get(instanceId)
-  if (!it) return
-  const nextRot = ((Number(it.rot || 0) || 0) + 1) % 4
-  if (currentRoom?.isHost) {
-    updatePlacedLocal({ instanceId, rot: nextRot })
-    net.broadcast({ type: "item_rotated", item: { instanceId, rot: nextRot } })
-  } else {
-    net.broadcast({ type: "rotate_item", item: { instanceId, rot: nextRot } })
-  }
-}
-
-function sendPickupItem(instanceId) {
-  if (!instanceId || !net) return
-  if (!currentRoom?.isHost) return
-  if (currentRoom?.isHost) {
-    removePlacedLocal(instanceId)
-    net.broadcast({ type: "item_picked_up", instanceId })
-  } else {
-    net.broadcast({ type: "pickup_item", instanceId })
-  }
-}
-
-function sendMoveItem(instanceId, tile) {
-  if (!instanceId || !net) return
-  if (!currentRoom?.isHost) return
-  if (!tile || typeof tile.x !== "number" || typeof tile.z !== "number") return
-  if (currentRoom?.isHost) {
-    updatePlacedLocal({ instanceId, tile })
-    net.broadcast({ type: "item_moved", item: { instanceId, tile } })
-  } else {
-    net.broadcast({ type: "move_item", item: { instanceId, tile } })
-  }
-}
-
-function publishPlacedItemLocationsSoon() {
-  if (!currentRoom?.isHost) return
-  if (!currentRoom?.roomId) return
-  for (const it of placedItems.values()) {
-    if (!it?.instanceId || !it?.tile) continue
-    queueItemLocationPublish(it.instanceId, {
-      state: "placed",
-      roomId: currentRoom.roomId,
-      tile: it.tile,
-      rot: it.rot || 0,
-      stackIndex: it.stackIndex || 0
-    })
-  }
 }
 
 function colorFromString(s) {
@@ -985,6 +939,13 @@ let suppressDisconnectUntil = 0
 let chatBubbleLayer = null
 let chatBubbles = []
 
+let typingBubbleLayer = null
+const typingBubbles = new Map()
+let myTyping = false
+let myLastTypingInputAt = 0
+let typingStopTimer = null
+let lastTypingBroadcastAt = 0
+
 let myDisplayName = ""
 const playerNames = {}
 const nostrProfileRequested = new Set()
@@ -1054,6 +1015,7 @@ const createRoomCancelEl = document.getElementById("createRoomCancel")
 
 let selectedCreateRoomPlan = ""
 let selectedCreateRoomDoor = null
+let selectedCreateRoomEntryDir = 2
 let customScrollbarApi = null
 
 const catalog = [
@@ -1308,27 +1270,6 @@ function updateGhostFromMouseEvent(e) {
   }
 }
 
-function ensureShopCategories() {
-  if (!shopCategoriesEl) return
-  const cats = Array.from(new Set(catalog.map((x) => x.category || "Other")))
-  cats.sort((a, b) => a.localeCompare(b))
-  const all = ["All", ...cats]
-  shopCategoriesEl.innerHTML = ""
-  for (const c of all) {
-    const btn = document.createElement("button")
-    btn.type = "button"
-    btn.className = "shop-cat"
-    btn.textContent = c
-    btn.classList.toggle("selected", String(selectedShopCategory) === String(c))
-    btn.onclick = () => {
-      selectedShopCategory = c
-      ensureShopCategories()
-      renderCatalog()
-    }
-    shopCategoriesEl.appendChild(btn)
-  }
-}
-
 function tryPlaceSelectedAtTile(tile) {
   if (!tile || typeof tile.x !== "number" || typeof tile.z !== "number") return false
   if (!currentRoom?.isHost) return false
@@ -1469,6 +1410,12 @@ function getDoorFromTemplateButton(btn) {
   const zRaw = Number(btn?.getAttribute?.("data-door-z"))
   if (!Number.isFinite(xRaw) || !Number.isFinite(zRaw)) return null
   return { x: Math.floor(xRaw), z: Math.floor(zRaw) }
+}
+
+function getEntryDirFromTemplateButton(btn) {
+  const raw = Number(btn?.getAttribute?.("data-entry-dir"))
+  if (!Number.isFinite(raw)) return 2
+  return raw
 }
 
 function initCustomScrollbars() {
@@ -1702,6 +1649,10 @@ function setInRoom(inRoom) {
 
   if (chatBubbleLayer) {
     chatBubbleLayer.style.display = inRoom ? "block" : "none"
+  }
+
+  if (typingBubbleLayer) {
+    typingBubbleLayer.style.display = inRoom ? "block" : "none"
   }
 }
 
@@ -1938,6 +1889,108 @@ function ensureChatBubbleLayer() {
   document.body.appendChild(chatBubbleLayer)
 }
 
+function ensureTypingBubbleLayer() {
+  if (typingBubbleLayer) return
+
+  typingBubbleLayer = document.createElement("div")
+  typingBubbleLayer.id = "typingBubbles"
+  typingBubbleLayer.style.position = "absolute"
+  typingBubbleLayer.style.left = "0"
+  typingBubbleLayer.style.top = "0"
+  typingBubbleLayer.style.width = "100%"
+  typingBubbleLayer.style.height = "100%"
+  typingBubbleLayer.style.pointerEvents = "none"
+  typingBubbleLayer.style.overflow = "hidden"
+  typingBubbleLayer.style.display = document.body.classList.contains("in-room") ? "block" : "none"
+  document.body.appendChild(typingBubbleLayer)
+}
+
+function setTypingForPubkey(pubkey, isTyping) {
+  if (!pubkey) return
+  ensureTypingBubbleLayer()
+
+  if (!isTyping) {
+    const b = typingBubbles.get(pubkey)
+    if (b) {
+      try {
+        b.el.remove()
+      } catch {}
+      typingBubbles.delete(pubkey)
+    }
+    return
+  }
+
+  const now = performance.now()
+  const existing = typingBubbles.get(pubkey)
+  if (existing) {
+    existing.expiresAt = now + 5_500
+    return
+  }
+
+  const el = document.createElement("div")
+  el.className = "typing-bubble"
+  el.textContent = "typing…"
+  typingBubbleLayer.appendChild(el)
+
+  typingBubbles.set(pubkey, {
+    pubkey,
+    el,
+    expiresAt: now + 5_500,
+    x: 0,
+    y: 0
+  })
+}
+
+function updateTypingBubbles() {
+  if (!typingBubbleLayer || !camera || !renderer) return
+
+  const now = performance.now()
+
+  for (const [pubkey, b] of typingBubbles.entries()) {
+    if (b.expiresAt && now >= b.expiresAt) {
+      try {
+        b.el.remove()
+      } catch {}
+      typingBubbles.delete(pubkey)
+      continue
+    }
+
+    const av = avatars[pubkey]
+    if (!av) {
+      b.el.style.display = "none"
+      continue
+    }
+
+    const world = new THREE.Vector3(av.position.x, av.position.y + 2.55, av.position.z)
+    const projected = world.project(camera)
+
+    const x = (projected.x * 0.5 + 0.5) * renderer.domElement.clientWidth
+    const y = (-(projected.y * 0.5) + 0.5) * renderer.domElement.clientHeight
+
+    b.x = x
+    b.y = y
+    b.el.style.display = "block"
+    b.el.style.transform = `translate(-50%, -100%) translate(${x}px, ${y}px)`
+  }
+}
+
+function broadcastTyping(isTyping) {
+  if (!net) return
+  if (!currentRoom) return
+
+  const out = { type: "typing", typing: Boolean(isTyping) }
+  if (currentRoom.isHost) out.pubkey = myPubkey
+  handleNetMessage(myPubkey, { ...out, pubkey: myPubkey })
+  net.broadcast(out)
+}
+
+function setMyTyping(isTyping) {
+  const next = Boolean(isTyping)
+  if (next === myTyping) return
+  myTyping = next
+  broadcastTyping(next)
+}
+
 function spawnChatBubble(pubkey, text) {
   if (!pubkey || !text) return
   if (!scene || !camera) return
@@ -2109,6 +2162,7 @@ function openRoomInfo(room, { isHost } = {}) {
         name: room?.name,
         plan: room?.plan,
         door: room?.door || null,
+        entryDir: room?.entryDir ?? 2,
         ownerPubkey: isHost ? myPubkey : room?.ownerPubkey,
         isHost: Boolean(isHost)
       })
@@ -2172,6 +2226,7 @@ function makeRoomListItem(room, { forceHost = false, source = "public" } = {}) {
       name: r.name,
       plan: r.plan,
       door: r.door || null,
+      entryDir: r.entryDir ?? 2,
       ownerPubkey: isOwner ? myPubkey : r.ownerPubkey,
       isHost: isOwner
     })
@@ -2219,7 +2274,8 @@ function startRoomAnnouncements({ roomId, code, name, plan, door }) {
   stopRoomAnnouncements()
   const announce = async () => {
     const count = Math.max(1, avatars ? Object.keys(avatars).length : 1)
-    const payload = JSON.stringify({ type: "room", roomId, code, name, plan, door: door || null, count, ownerPubkey: myPubkey, ts: Math.floor(Date.now() / 1000) })
+    const entryDir = currentRoom?.entryDir
+    const payload = JSON.stringify({ type: "room", roomId, code, name, plan, door: door || null, entryDir: entryDir == null ? 2 : entryDir, count, ownerPubkey: myPubkey, ts: Math.floor(Date.now() / 1000) })
     const tags = [["t", "nabbo-room"], ["room", roomId]]
     try {
       await publish(1, payload, tags)
@@ -2405,6 +2461,12 @@ function handleNetMessage(fromPubkey, msg) {
     return
   }
 
+  if (msg.type === "typing") {
+    const who = msg.pubkey ?? fromPubkey
+    if (who) setTypingForPubkey(who, Boolean(msg.typing))
+    return
+  }
+
   if (msg.type === "snapshot" && Array.isArray(msg.players)) {
     for (const p of msg.players) {
       if (!p?.pubkey || !p?.pos) continue
@@ -2554,6 +2616,8 @@ function handlePeerState(peer, state) {
           dir: getDir8FromYaw(av?.rotation?.y || 0)
         }
         if (out.pose === "sit" && av?.userData?.sittingOnInstanceId) out.sittingOn = av.userData.sittingOnInstanceId
+        const app = appearances[pubkey]
+        if (app) out.appearance = app
         return out
       })
       net.sendTo(peer, { type: "snapshot", players })
@@ -2602,14 +2666,15 @@ function handlePeerState(peer, state) {
   }
 }
 
-async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, announcePublic }) {
+async function startRoom({ roomId, code, name, plan, door, entryDir, ownerPubkey, isHost, announcePublic }) {
   if (currentRoom) {
     teardownRoom({ reason: null, showLobby: false })
   }
   if (isHost && typeof announcePublic !== "boolean") {
     announcePublic = true
   }
-  currentRoom = { roomId, code, name, plan, door: door || null, ownerPubkey, isHost, announcePublic }
+  const ed = entryDir == null ? 2 : Number(entryDir)
+  currentRoom = { roomId, code, name, plan, door: door || null, entryDir: Number.isFinite(ed) ? ed : 2, ownerPubkey, isHost, announcePublic }
   setInRoom(true)
   updateFurniAccessUi()
   win.hideWindow(lobbyEl, dockNavigator)
@@ -2625,7 +2690,7 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
   remoteTargets = {}
 
   if (isHost) {
-    upsertMyRoom({ roomId, code, name, plan, door: door || null })
+    upsertMyRoom({ roomId, code, name, plan, door: door || null, entryDir: currentRoom.entryDir })
     const shouldAnnounce = Boolean(currentRoom.announcePublic)
     if (shouldAnnounce) startRoomAnnouncements({ roomId, code, name, plan, door: door || null })
     else {
@@ -2647,7 +2712,8 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
         scene.remove(floor)
       }
     } catch {}
-    floor = createRoom(scene, { plan: effectivePlan, door: door || null })
+    const ed2 = currentRoom?.entryDir
+    floor = createRoom(scene, { plan: effectivePlan, door: door || null, entryDir: ed2 == null ? 2 : ed2 })
     currentFloorPlan = effectivePlan
   }
 
@@ -2702,24 +2768,30 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
 
           const players = Object.keys(avatars).map((pubkey) => {
             const av = avatars[pubkey]
-            const pos = snapToTileCenter({ x: av.position.x, z: av.position.z })
-            const p = {
+            const p = snapToTileCenter({ x: av.position.x, z: av.position.z })
+            const out = {
               pubkey,
               name: getDisplayName(pubkey),
-              pos,
-              tile: toTileCoord(pos),
+              pos: p,
+              tile: toTileCoord(p),
               pose: av?.userData?.pose || "stand",
               dir: getDir8FromYaw(av?.rotation?.y || 0)
             }
-            if (p.pose === "sit" && av?.userData?.sittingOnInstanceId) p.sittingOn = av.userData.sittingOnInstanceId
+            if (out.pose === "sit" && av?.userData?.sittingOnInstanceId) out.sittingOn = av.userData.sittingOnInstanceId
             const app = appearances[pubkey]
-            if (app) p.appearance = app
-            return p
+            if (app) out.appearance = app
+            return out
           })
           net.sendTo(peer, { type: "snapshot", players })
           return
         }
         if (msg.type === "chat") {
+          const out = { ...msg, pubkey: peer }
+          handleNetMessage(peer, out)
+          net.broadcast(out)
+          return
+        }
+        if (msg.type === "typing") {
           const out = { ...msg, pubkey: peer }
           handleNetMessage(peer, out)
           net.broadcast(out)
@@ -2751,11 +2823,22 @@ function parseJoinInput(s) {
   const code = v.toUpperCase()
   const match = publicRooms ? publicRooms.findByCode(code) : null
   if (match) {
-    return { roomId: match.roomId, code: match.code, name: match.name, plan: match.plan, door: match.door || null, ownerPubkey: match.ownerPubkey }
+    return { roomId: match.roomId, code: match.code, name: match.name, plan: match.plan, door: match.door || null, entryDir: match.entryDir ?? 2, ownerPubkey: match.ownerPubkey }
   }
 
   const mine = loadMyRooms().find((r) => r.code?.toUpperCase() === code)
-  if (mine) return { roomId: mine.roomId, ownerPubkey: myPubkey, code: mine.code, name: mine.name, plan: mine.plan, isHost: true }
+  if (mine) {
+    return {
+      roomId: mine.roomId,
+      ownerPubkey: myPubkey,
+      code: mine.code,
+      name: mine.name,
+      plan: mine.plan,
+      door: mine.door || null,
+      entryDir: mine.entryDir ?? 2,
+      isHost: true
+    }
+  }
 
   return { code }
 }
@@ -2960,6 +3043,7 @@ async function init() {
       if (!code) return
       selectedCreateRoomPlan = code
       selectedCreateRoomDoor = getDoorFromTemplateButton(btn)
+      selectedCreateRoomEntryDir = getEntryDirFromTemplateButton(btn)
       renderPlanPreviews()
     })
   }
@@ -2969,6 +3053,7 @@ async function init() {
     const code = first?.getAttribute?.("data-plan-code")
     if (code) selectedCreateRoomPlan = code
     selectedCreateRoomDoor = getDoorFromTemplateButton(first)
+    selectedCreateRoomEntryDir = getEntryDirFromTemplateButton(first)
   }
 
   renderPlanPreviews()
@@ -3045,6 +3130,7 @@ async function init() {
     if (!selectedCreateRoomDoor) {
       const first = createRoomTemplatesEl?.querySelector?.(".plan-card")
       selectedCreateRoomDoor = getDoorFromTemplateButton(first)
+      selectedCreateRoomEntryDir = getEntryDirFromTemplateButton(first)
     }
     if (createRoomPublicEl) createRoomPublicEl.checked = true
     win.showWindow(createRoomWinEl)
@@ -3060,10 +3146,11 @@ async function init() {
       const name = nameRaw || `Room ${code}`
       const plan = selectedCreateRoomPlan || getDefaultPlanCode()
       const door = selectedCreateRoomDoor || null
+      const entryDir = selectedCreateRoomEntryDir ?? 2
       const announcePublic = Boolean(createRoomPublicEl?.checked)
 
       win.hideWindow(createRoomWinEl)
-      await startRoom({ roomId, code, name, plan, door, ownerPubkey: myPubkey, isHost: true, announcePublic })
+      await startRoom({ roomId, code, name, plan, door, entryDir, ownerPubkey: myPubkey, isHost: true, announcePublic })
     }
   }
 
@@ -3078,7 +3165,7 @@ async function init() {
     if (!parsed) return
 
     if (parsed.isHost) {
-      await startRoom({ roomId: parsed.roomId, code: parsed.code || roomIdToCode(parsed.roomId), name: parsed.name, plan: parsed.plan, door: parsed.door || null, ownerPubkey: myPubkey, isHost: true })
+      await startRoom({ roomId: parsed.roomId, code: parsed.code || roomIdToCode(parsed.roomId), name: parsed.name, plan: parsed.plan, door: parsed.door || null, entryDir: parsed.entryDir ?? 2, ownerPubkey: myPubkey, isHost: true })
       return
     }
 
@@ -3098,13 +3185,19 @@ async function init() {
     const name = parsed.name ?? r?.name
     const plan = parsed.plan ?? r?.plan
     const door = parsed.door ?? r?.door ?? null
-    await startRoom({ roomId, code, name, plan, door, ownerPubkey: owner, isHost: false })
+    const entryDir = parsed.entryDir ?? r?.entryDir ?? 2
+    await startRoom({ roomId, code, name, plan, door, entryDir, ownerPubkey: owner, isHost: false })
   }
 
   sendBtn.onclick = async () => {
     const msg = chatInput.value.trim()
     if (!msg) return
     chatInput.value = ""
+    setMyTyping(false)
+    if (typingStopTimer) {
+      clearTimeout(typingStopTimer)
+      typingStopTimer = null
+    }
 
     if (!net) return
 
@@ -3122,6 +3215,31 @@ async function init() {
     if (e.shiftKey) return
     e.preventDefault()
     sendBtn.click()
+  })
+
+  chatInput.addEventListener("input", () => {
+    if (!chatInput.value.trim()) {
+      setMyTyping(false)
+      if (typingStopTimer) {
+        clearTimeout(typingStopTimer)
+        typingStopTimer = null
+      }
+      return
+    }
+
+    const now = performance.now()
+    if (now - myLastTypingInputAt < 100) return
+    myLastTypingInputAt = now
+    setMyTyping(true)
+    if (typingStopTimer) clearTimeout(typingStopTimer)
+    typingStopTimer = setTimeout(() => {
+      typingStopTimer = null
+      setMyTyping(false)
+    }, 5000)
+  })
+
+  chatInput.addEventListener("blur", () => {
+    setMyTyping(false)
   })
 
   raycaster = new THREE.Raycaster()
@@ -3407,6 +3525,7 @@ function animate() {
   lastAnimAt = now
 
   updateChatBubbles()
+  updateTypingBubbles()
 
   if (myAvatar && currentRoom) {
     const speed = 3.0

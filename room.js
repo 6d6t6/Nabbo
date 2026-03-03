@@ -1,6 +1,6 @@
 import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js'
 
-export function createRoom(scene, { plan = "classic", door = null } = {}) {
+export function createRoom(scene, { plan = "classic", door = null, entryDir = 2 } = {}) {
   const heightFromChar = (ch) => {
     if (!ch) return null
     if (ch === "x" || ch === "X") return null
@@ -297,7 +297,11 @@ export function createRoom(scene, { plan = "classic", door = null } = {}) {
     return { x, z }
   })()
 
-  const entryDir = 3
+  const entryDirNorm = (() => {
+    const raw = entryDir == null ? 2 : Number(entryDir)
+    const d = Number.isFinite(raw) ? raw : 2
+    return ((d % 8) + 8) % 8
+  })()
 
   const doorways = (() => {
     // Any single-tile protrusion on the far (west/north) silhouette becomes a doorway cutout.
@@ -484,7 +488,7 @@ export function createRoom(scene, { plan = "classic", door = null } = {}) {
   floor.userData.tileToWorld = tileToWorld
   floor.userData.worldToTile = worldToTile
   floor.userData.door = doorPicked
-  floor.userData.entryDir = entryDir
+  floor.userData.entryDir = entryDirNorm
 
   return floor
 }
