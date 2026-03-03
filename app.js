@@ -16,6 +16,12 @@ let mouse
 
 let avatars = {}
 
+function updateFurniAccessUi() {
+  const host = Boolean(currentRoom?.isHost)
+  if (inventoryPlaceEl) inventoryPlaceEl.disabled = !host
+  if (inventoryCancelPlaceEl) inventoryCancelPlaceEl.disabled = !host || !isPlacing
+}
+
  let issuerPubkey = ""
 
 let selectedShopCategory = "All"
@@ -64,73 +70,74 @@ function refreshCoins() {
   if (!myPubkey) return
   stopCoinsSub()
 
-   loadCachedCoins()
+  loadCachedCoins()
   renderCoins()
   renderCatalog()
 
-   ;(async () => {
-     try {
-       if (!issuerPubkey) return
-       const withTimeout = async (p, ms) => {
-         let t
-         try {
-           return await Promise.race([
-             p,
-             new Promise((_, rej) => {
-               t = setTimeout(() => rej(new Error("timeout")), ms)
-             })
-           ])
-         } finally {
-           if (t) clearTimeout(t)
-         }
-       }
+  ;(async () => {
+    try {
+      if (!issuerPubkey) return
 
-       const [claims, mints] = await withTimeout(
-         Promise.all([
-           list({
-             kinds: [30079],
-             authors: [issuerPubkey],
-             "#t": ["nabbo-claim"],
-             "#p": [myPubkey],
-             limit: 5000
-           }),
-           list({
-             kinds: [1],
-             authors: [issuerPubkey],
-             "#t": ["nabbo-item"],
-             "#p": [myPubkey],
-             limit: 5000
-           })
-         ]),
-         2500
-       )
+      const withTimeout = async (p, ms) => {
+        let t
+        try {
+          return await Promise.race([
+            p,
+            new Promise((_, rej) => {
+              t = setTimeout(() => rej(new Error("timeout")), ms)
+            })
+          ])
+        } finally {
+          if (t) clearTimeout(t)
+        }
+      }
 
-       const dailyAmount = 100
-       const claimDays = new Set()
-       for (const ev of claims || []) {
-         const d = ev?.tags?.find((t) => t?.[0] === "d")?.[1]
-         if (d && typeof d === "string" && d.startsWith(`claim:${myPubkey}:`)) claimDays.add(d)
-       }
-       lastClaimsSet = claimDays
-       const earned = claimDays.size * dailyAmount
+      const [claims, mints] = await withTimeout(
+        Promise.all([
+          list({
+            kinds: [30079],
+            authors: [issuerPubkey],
+            "#t": ["nabbo-claim"],
+            "#p": [myPubkey],
+            limit: 5000
+          }),
+          list({
+            kinds: [1],
+            authors: [issuerPubkey],
+            "#t": ["nabbo-item"],
+            "#p": [myPubkey],
+            limit: 5000
+          })
+        ]),
+        2500
+      )
 
-       let spent = 0
-       for (const ev of mints || []) {
-         const op = ev?.tags?.find((t) => t?.[0] === "op")?.[1]
-         if (op !== "mint") continue
-         const defId = ev?.tags?.find((t) => t?.[0] === "def")?.[1]
-         const it = catalog.find((x) => x.defId === defId)
-         if (it?.price) spent += Number(it.price) || 0
-       }
+      const dailyAmount = 100
+      const claimDays = new Set()
+      for (const ev of claims || []) {
+        const d = ev?.tags?.find((t) => t?.[0] === "d")?.[1]
+        if (d && typeof d === "string" && d.startsWith(`claim:${myPubkey}:`)) claimDays.add(d)
+      }
+      lastClaimsSet = claimDays
+      const earned = claimDays.size * dailyAmount
 
-       coinsBalance = Math.max(0, earned - spent)
-       latestBalanceEvent = null
-       saveCachedCoins()
-       renderCoins()
-       renderCatalog()
-       updateClaimUi()
-     } catch {}
-   })()
+      let spent = 0
+      for (const ev of mints || []) {
+        const op = ev?.tags?.find((t) => t?.[0] === "op")?.[1]
+        if (op !== "mint") continue
+        const defId = ev?.tags?.find((t) => t?.[0] === "def")?.[1]
+        const it = catalog.find((x) => x.defId === defId)
+        if (it?.price) spent += Number(it.price) || 0
+      }
+
+      coinsBalance = Math.max(0, earned - spent)
+      latestBalanceEvent = null
+      saveCachedCoins()
+      renderCoins()
+      renderCatalog()
+      updateClaimUi()
+    } catch {}
+  })()
 }
 
 function updateClaimUi() {
@@ -262,6 +269,7 @@ function renderInventory() {
   const items = Array.from(inventoryItems.values())
     .filter((x) => x?.toPubkey?.toLowerCase?.() === myPubkey?.toLowerCase?.())
     .filter((x) => !placedIds.has(x.instanceId))
+    .filter((x) => shouldShowInInventory(x))
     .sort((a, b) => (b.ts || 0) - (a.ts || 0))
 
   if (items.length === 0) {
@@ -329,12 +337,18 @@ function stopInventorySub() {
     inventorySub?.unsub?.()
   } catch {}
   inventorySub = null
+
+  try {
+    itemLocSub?.unsub?.()
+  } catch {}
+  itemLocSub = null
 }
 
 function refreshInventory() {
   if (!myPubkey) return
   stopInventorySub()
   inventoryItems.clear()
+  itemLocations.clear()
 
   inventorySub = subscribe(
     {
@@ -357,7 +371,50 @@ function refreshInventory() {
     }
   )
 
+  itemLocSub = subscribe(
+    {
+      kinds: [30081],
+      "#t": ["nabbo-item-loc"],
+      authors: [myPubkey],
+      since: Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 30
+    },
+    (ev) => {
+      const d = ev?.tags?.find((t) => t?.[0] === "d")?.[1]
+      if (!d) return
+      let obj
+      try {
+        obj = JSON.parse(ev?.content || "{}")
+      } catch {
+        return
+      }
+      if (obj?.type !== "nabbo_item_loc") return
+      if (String(obj.instanceId || "") !== String(d)) return
+      itemLocations.set(String(d), obj)
+      renderInventory()
+    }
+  )
+
   renderInventory()
+}
+
+function getEffectiveLocation(instanceId) {
+  const loc = itemLocations.get(String(instanceId || ""))
+  if (!loc || loc?.type !== "nabbo_item_loc") return null
+  return loc
+}
+
+function shouldShowInInventory(it) {
+  const instanceId = String(it?.instanceId || "")
+  if (!instanceId) return false
+  const loc = getEffectiveLocation(instanceId)
+  if (!loc) return true
+  if (loc.state === "inventory") return true
+  if (loc.state === "placed") {
+    const roomId = String(loc.roomId || "")
+    const cur = String(currentRoom?.roomId || "")
+    return Boolean(roomId && cur && roomId === cur)
+  }
+  return true
 }
 
 function clampToWalkable(pos) {
@@ -426,6 +483,7 @@ function teardownRoom({ reason = null, showLobby = true } = {}) {
   }
 
   setInRoom(false)
+  updateFurniAccessUi()
   if (showLobby) {
     win.showWindow(lobbyEl, dockNavigator)
     win.focusWindow(lobbyEl)
@@ -448,6 +506,9 @@ function removePlacedLocal(instanceId) {
   }
   placedItems.delete(instanceId)
   renderInventory()
+  if (currentRoom?.isHost) {
+    queueItemLocationPublish(instanceId, { state: "inventory" })
+  }
   if (currentRoom?.isHost && !loadingRoomState) {
     scheduleSaveRoomFurni()
   }
@@ -470,9 +531,59 @@ function updatePlacedLocal({ instanceId, tile, rot }) {
     if (existing.mesh) existing.mesh.rotation.y = rot * (Math.PI / 2)
   }
   placedItems.set(instanceId, next)
+  if (currentRoom?.isHost) {
+    const payload = { state: "placed", roomId: currentRoom.roomId }
+    if (tile) payload.tile = tile
+    if (typeof rot === "number") payload.rot = rot
+    queueItemLocationPublish(instanceId, payload)
+  }
   if (currentRoom?.isHost && !loadingRoomState) {
     scheduleSaveRoomFurni()
   }
+}
+
+function queueItemLocationPublish(instanceId, patch) {
+  if (!myPubkey) return
+  const id = String(instanceId || "")
+  if (!id) return
+  const prev = pendingLocUpdates.get(id) || {}
+  pendingLocUpdates.set(id, { ...prev, ...patch })
+  if (pendingLocTimer) return
+  pendingLocTimer = setTimeout(() => {
+    pendingLocTimer = null
+    flushItemLocationPublishes().catch(() => {})
+  }, 2000)
+}
+
+async function flushItemLocationPublishes() {
+  if (!pendingLocUpdates.size) return
+  const batch = pendingLocUpdates
+  pendingLocUpdates = new Map()
+
+  const now = Math.floor(Date.now() / 1000)
+  for (const [instanceId, patch] of batch.entries()) {
+    const obj = {
+      type: "nabbo_item_loc",
+      instanceId,
+      updatedAt: now,
+      state: patch.state || "placed"
+    }
+    if (obj.state === "placed") {
+      obj.roomId = String(patch.roomId || currentRoom?.roomId || "")
+      if (patch.tile) obj.tile = patch.tile
+      if (typeof patch.rot === "number") obj.rot = patch.rot
+      if (typeof patch.stackIndex === "number") obj.stackIndex = patch.stackIndex
+    }
+    const tags = [
+      ["t", "nabbo-item-loc"],
+      ["d", instanceId]
+    ]
+    try {
+      await publish(30081, JSON.stringify(obj), tags)
+      itemLocations.set(instanceId, obj)
+    } catch {}
+  }
+  renderInventory()
 }
 
 function pickPlacedInstanceFromEvent(e) {
@@ -488,6 +599,7 @@ function pickPlacedInstanceFromEvent(e) {
 
 function sendRotateItem(instanceId) {
   if (!instanceId || !net) return
+  if (!currentRoom?.isHost) return
   const it = placedItems.get(instanceId)
   if (!it) return
   const nextRot = ((Number(it.rot || 0) || 0) + 1) % 4
@@ -501,6 +613,7 @@ function sendRotateItem(instanceId) {
 
 function sendPickupItem(instanceId) {
   if (!instanceId || !net) return
+  if (!currentRoom?.isHost) return
   if (currentRoom?.isHost) {
     removePlacedLocal(instanceId)
     net.broadcast({ type: "item_picked_up", instanceId })
@@ -511,12 +624,28 @@ function sendPickupItem(instanceId) {
 
 function sendMoveItem(instanceId, tile) {
   if (!instanceId || !net) return
+  if (!currentRoom?.isHost) return
   if (!tile || typeof tile.x !== "number" || typeof tile.z !== "number") return
   if (currentRoom?.isHost) {
     updatePlacedLocal({ instanceId, tile })
     net.broadcast({ type: "item_moved", item: { instanceId, tile } })
   } else {
     net.broadcast({ type: "move_item", item: { instanceId, tile } })
+  }
+}
+
+function publishPlacedItemLocationsSoon() {
+  if (!currentRoom?.isHost) return
+  if (!currentRoom?.roomId) return
+  for (const it of placedItems.values()) {
+    if (!it?.instanceId || !it?.tile) continue
+    queueItemLocationPublish(it.instanceId, {
+      state: "placed",
+      roomId: currentRoom.roomId,
+      tile: it.tile,
+      rot: it.rot || 0,
+      stackIndex: it.stackIndex || 0
+    })
   }
 }
 
@@ -624,6 +753,10 @@ function placeItemLocal(item) {
   mesh.position.z = w.z
   const rot = Number(item.rot || 0) || 0
   mesh.rotation.y = rot * (Math.PI / 2)
+  const stackIndex = Number(item.stackIndex || 0) || 0
+  const def = getFurniDef(item.defId)
+  const step = Number(def.stackHeightStep || (def.height ? def.height * 0.6 : 0.4)) || 0.4
+  mesh.position.y += stackIndex * step
 
   mesh.traverse((o) => {
     if (o && typeof o === "object") {
@@ -634,8 +767,20 @@ function placeItemLocal(item) {
 
   placedGroup.add(mesh)
 
-  placedItems.set(item.instanceId, { ...item, rot, mesh })
+  placedItems.set(item.instanceId, { ...item, rot, stackIndex, mesh })
   renderInventory()
+
+  if (currentRoom?.isHost) {
+    if (!loadingRoomState) {
+      queueItemLocationPublish(item.instanceId, {
+        state: "placed",
+        roomId: currentRoom.roomId,
+        tile: item.tile,
+        rot,
+        stackIndex
+      })
+    }
+  }
 
   if (currentRoom?.isHost && !loadingRoomState) {
     scheduleSaveRoomFurni()
@@ -800,7 +945,9 @@ const catalog = [
 ]
 
 const inventoryItems = new Map()
+const itemLocations = new Map()
 let inventorySub = null
+let itemLocSub = null
 let selectedInstanceId = ""
 
 let coinsSub = null
@@ -824,6 +971,19 @@ let claimCountdownTimer = null
 
 let movingInstanceId = ""
 let movingStartTile = null
+
+let pendingLocUpdates = new Map()
+let pendingLocTimer = null
+
+const furniDefs = {
+  chair_basic: { height: 0.9, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: ["sit"] },
+  table_basic: { height: 0.8, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: [] },
+  plant_basic: { height: 1.1, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: [] }
+}
+
+function getFurniDef(defId) {
+  return furniDefs[String(defId || "")] || { height: 0.7, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: [] }
+}
 
 function colorFromId(id) {
   return `#${colorFromString(String(id || "")).toString(16).padStart(6, "0")}`
@@ -1014,6 +1174,7 @@ function ensureShopCategories() {
 
 function tryPlaceSelectedAtTile(tile) {
   if (!tile || typeof tile.x !== "number" || typeof tile.z !== "number") return false
+  if (!currentRoom?.isHost) return false
   if (!selectedInstanceId || !net) return false
   const inv = inventoryItems.get(selectedInstanceId)
   if (!inv?.defId) return false
@@ -2006,6 +2167,7 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
   }
   currentRoom = { roomId, code, name, plan, door: door || null, ownerPubkey, isHost, announcePublic }
   setInRoom(true)
+  updateFurniAccessUi()
   win.hideWindow(lobbyEl, dockNavigator)
   joinHintEl.textContent = ""
 
@@ -2057,7 +2219,12 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
     } finally {
       loadingRoomState = false
     }
+
+    publishPlacedItemLocationsSoon()
   }
+
+  renderInventory()
+  updateFurniAccessUi()
 
   myAvatar = ensureAvatar(myPubkey)
   const startPos = snapToTileCenter(getSpawnPos())
@@ -2096,39 +2263,6 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
           const out = { ...msg, pubkey: peer }
           handleNetMessage(peer, out)
           net.broadcast(out)
-          return
-        }
-
-        if (msg.type === "place_item" && msg.item) {
-          const item = msg.item
-          if (item?.instanceId && item?.defId && item?.tile && typeof item.tile.x === "number" && typeof item.tile.z === "number") {
-            placeItemLocal(item)
-            net.broadcast({ type: "item_placed", item })
-          }
-          return
-        }
-
-        if (msg.type === "move_item" && msg.item) {
-          const it = msg.item
-          if (it?.instanceId && it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number") {
-            updatePlacedLocal({ instanceId: it.instanceId, tile: it.tile })
-            net.broadcast({ type: "item_moved", item: { instanceId: it.instanceId, tile: it.tile } })
-          }
-          return
-        }
-
-        if (msg.type === "rotate_item" && msg.item) {
-          const it = msg.item
-          if (it?.instanceId && typeof it.rot === "number") {
-            updatePlacedLocal({ instanceId: it.instanceId, rot: it.rot })
-            net.broadcast({ type: "item_rotated", item: { instanceId: it.instanceId, rot: it.rot } })
-          }
-          return
-        }
-
-        if (msg.type === "pickup_item" && msg.instanceId) {
-          removePlacedLocal(msg.instanceId)
-          net.broadcast({ type: "item_picked_up", instanceId: msg.instanceId })
           return
         }
       }
@@ -2524,7 +2658,7 @@ async function init() {
     if (document.body.classList.contains("dragging")) return
     if (shouldIgnoreScenePointer(e.target)) return
 
-    if (e.altKey && !isPlacing) {
+    if (e.altKey && !isPlacing && currentRoom?.isHost) {
       const id = pickPlacedInstanceFromEvent(e)
       if (id) {
         movingInstanceId = id
