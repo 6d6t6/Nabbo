@@ -505,6 +505,7 @@ function removePlacedLocal(instanceId) {
     } catch {}
   }
   placedItems.delete(instanceId)
+  rebuildBlockedTiles()
   renderInventory()
   if (currentRoom?.isHost) {
     queueItemLocationPublish(instanceId, { state: "inventory" })
@@ -531,6 +532,7 @@ function updatePlacedLocal({ instanceId, tile, rot }) {
     if (existing.mesh) existing.mesh.rotation.y = rot * (Math.PI / 2)
   }
   placedItems.set(instanceId, next)
+  rebuildBlockedTiles()
   if (currentRoom?.isHost) {
     const payload = { state: "placed", roomId: currentRoom.roomId }
     if (tile) payload.tile = tile
@@ -768,6 +770,7 @@ function placeItemLocal(item) {
   placedGroup.add(mesh)
 
   placedItems.set(item.instanceId, { ...item, rot, stackIndex, mesh })
+  rebuildBlockedTiles()
   renderInventory()
 
   if (currentRoom?.isHost) {
@@ -975,14 +978,43 @@ let movingStartTile = null
 let pendingLocUpdates = new Map()
 let pendingLocTimer = null
 
+let blockedTileSet = new Set()
+
 const furniDefs = {
   chair_basic: { height: 0.9, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: ["sit"] },
   table_basic: { height: 0.8, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: [] },
-  plant_basic: { height: 1.1, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: [] }
+  plant_basic: { height: 1.1, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: true, stackHeightStep: 0.55, actions: [] }
 }
 
 function getFurniDef(defId) {
   return furniDefs[String(defId || "")] || { height: 0.7, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: [] }
+}
+
+function tileKey(x, z) {
+  return `${x},${z}`
+}
+
+function rebuildBlockedTiles() {
+  const next = new Set()
+  for (const it of placedItems.values()) {
+    if (!it?.tile) continue
+    const def = getFurniDef(it.defId)
+    if (!def?.blocksMovement) continue
+    next.add(tileKey(it.tile.x, it.tile.z))
+  }
+  blockedTileSet = next
+}
+
+function getStackIndexForTile(tile) {
+  if (!tile) return 0
+  let max = -1
+  for (const it of placedItems.values()) {
+    if (!it?.tile) continue
+    if (it.tile.x !== tile.x || it.tile.z !== tile.z) continue
+    const si = Number(it.stackIndex || 0) || 0
+    if (si > max) max = si
+  }
+  return max + 1
 }
 
 function colorFromId(id) {
@@ -1149,6 +1181,16 @@ function updateGhostFromMouseEvent(e) {
   ghostItem.visible = true
   ghostItem.position.x = w.x
   ghostItem.position.z = w.z
+
+  const defId = getSelectedPlacementDefId()
+  const def = getFurniDef(defId)
+  if (def?.stackable) {
+    const stackIndex = getStackIndexForTile(tile)
+    const step = Number(def.stackHeightStep || (def.height ? def.height * 0.6 : 0.4)) || 0.4
+    ghostItem.position.y = stackIndex * step
+  } else {
+    ghostItem.position.y = 0
+  }
 }
 
 function ensureShopCategories() {
@@ -1178,7 +1220,13 @@ function tryPlaceSelectedAtTile(tile) {
   if (!selectedInstanceId || !net) return false
   const inv = inventoryItems.get(selectedInstanceId)
   if (!inv?.defId) return false
-  const item = { instanceId: selectedInstanceId, defId: inv.defId, tile: { x: tile.x, z: tile.z }, rot: 0 }
+
+  const def = getFurniDef(inv.defId)
+  const occupied = Array.from(placedItems.values()).some((it) => it?.tile?.x === tile.x && it?.tile?.z === tile.z)
+  if (occupied && !def?.stackable) return false
+  const stackIndex = def?.stackable ? getStackIndexForTile(tile) : 0
+
+  const item = { instanceId: selectedInstanceId, defId: inv.defId, tile: { x: tile.x, z: tile.z }, rot: 0, stackIndex }
   if (currentRoom?.isHost) {
     placeItemLocal(item)
     net.broadcast({ type: "item_placed", item })
@@ -1565,7 +1613,8 @@ function toTileCoord(pos) {
 function isTileWalkable(pos) {
   if (!floor?.userData?.tileSet) return true
   const t = toTileCoord(pos)
-  return floor.userData.tileSet.has(`${t.x},${t.z}`)
+  if (!floor.userData.tileSet.has(`${t.x},${t.z}`)) return false
+  return !blockedTileSet.has(tileKey(t.x, t.z))
 }
 
 function fromTileCoord(tile) {
