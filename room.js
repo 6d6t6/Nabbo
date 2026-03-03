@@ -297,6 +297,8 @@ export function createRoom(scene, { plan = "classic", door = null } = {}) {
     return { x, z }
   })()
 
+  const entryDir = 3
+
   const doorways = (() => {
     // Any single-tile protrusion on the far (west/north) silhouette becomes a doorway cutout.
     const out = []
@@ -482,6 +484,7 @@ export function createRoom(scene, { plan = "classic", door = null } = {}) {
   floor.userData.tileToWorld = tileToWorld
   floor.userData.worldToTile = worldToTile
   floor.userData.door = doorPicked
+  floor.userData.entryDir = entryDir
 
   return floor
 }

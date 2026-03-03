@@ -2675,6 +2675,14 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
   if (myAppearance) setAvatarAppearance(myAvatar, myAppearance)
   const startPos = snapToTileCenter(getSpawnPos())
   updateAvatarPosition(myAvatar, startPos)
+  {
+    const d = floor?.userData?.entryDir
+    if (typeof d === "number" && Number.isFinite(d)) {
+      myAvatar.rotation.y = yawFromDir8(d)
+    } else {
+      myAvatar.rotation.y = yawFromDir8(0)
+    }
+  }
   myTarget = { x: startPos.x, z: startPos.z }
 
   suppressDisconnectUntil = Date.now() + 1500
@@ -3310,15 +3318,16 @@ async function init() {
         }
       }
 
-      pendingSit = null
       const wasSittingBefore = myPose === "sit" && Boolean(sittingOnInstanceId)
-      standUpIfSitting()
       const w = floor.userData.tileToWorld(tile.x, tile.z)
       const target = { x: w.x, z: w.z }
       const startTile = toTileCoord({ x: myAvatar?.position?.x ?? 0, z: myAvatar?.position?.z ?? 0 })
       const allowStartBlocked = wasSittingBefore
       const path = findPathAStar(startTile, tile, { allowGoalBlocked: false, allowStartBlocked })
       if (!path || path.length === 0) return
+
+      pendingSit = null
+      standUpIfSitting()
       myPath = path
       if (myPath.length > 1) myPath.shift()
       const nextTile = myPath[0]
@@ -3333,6 +3342,7 @@ async function init() {
     const wasSittingBefore = myPose === "sit" && Boolean(sittingOnInstanceId)
     const path = findPathAStar(startTile, goalTile, { allowGoalBlocked: false, allowStartBlocked: wasSittingBefore })
     if (!path || path.length === 0) return
+
     pendingSit = null
     standUpIfSitting()
     myPath = path
