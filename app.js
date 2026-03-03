@@ -20,6 +20,10 @@ function shouldIncludePoseInNet() {
   return myPose === "sit"
 }
 
+function shouldIncludeSittingOnInNet() {
+  return myPose === "sit" && Boolean(sittingOnInstanceId)
+}
+
 function updateFurniAccessUi() {
   const host = Boolean(currentRoom?.isHost)
   if (inventoryPlaceEl) inventoryPlaceEl.disabled = !host
@@ -869,6 +873,8 @@ let wasMoving = false
 
 let myPose = "stand"
 let sittingOnInstanceId = ""
+
+let pendingSit = null
 
 let roomAnnounceInterval = null
 
@@ -2053,6 +2059,13 @@ function setPoseForPubkey(pubkey, pose) {
   setAvatarPose(av, pose)
 }
 
+function setRemoteSitting(pubkey, instanceId) {
+  const av = ensureAvatar(pubkey)
+  av.userData.sittingOnInstanceId = String(instanceId || "")
+  setAvatarPose(av, "sit")
+  if (av.userData.sittingOnInstanceId) applySitTransform(av, av.userData.sittingOnInstanceId)
+}
+
 function setMyPose(pose, { sittingOn = "" } = {}) {
   const p = pose === "sit" ? "sit" : "stand"
   myPose = p
@@ -2063,6 +2076,7 @@ function setMyPose(pose, { sittingOn = "" } = {}) {
 function standUpIfSitting() {
   if (myPose !== "sit") return
   setMyPose("stand")
+  pendingSit = null
 }
 
 function getPlacedAtTile(tile) {
@@ -2095,13 +2109,33 @@ function trySitOnInstance(instanceId) {
   for (const t of candidates) {
     const w = fromTileCoord(t)
     if (!isTileWalkable(w)) continue
-    myTarget = snapToTileCenter(w)
-    updateAvatarPosition(myAvatar, myTarget)
-    setMyPose("sit", { sittingOn: instanceId })
+    pendingSit = {
+      instanceId,
+      approach: snapToTileCenter(w)
+    }
+    setMyPose("stand")
+    myTarget = pendingSit.approach
     return true
   }
 
   return false
+}
+
+function applySitTransform(avatar, instanceId) {
+  const it = placedItems.get(instanceId)
+  if (!avatar || !it?.mesh || !it?.tile) return
+  const chairWorld = fromTileCoord(it.tile)
+  avatar.position.x = chairWorld.x
+  avatar.position.z = chairWorld.z
+  const baseY = typeof it.mesh.position?.y === "number" ? it.mesh.position.y : 0.5
+  avatar.position.y = baseY + 0.6
+}
+
+function isNear(a, b, eps = 0.06) {
+  if (!a || !b) return false
+  const dx = (a.x || 0) - (b.x || 0)
+  const dz = (a.z || 0) - (b.z || 0)
+  return Math.sqrt(dx * dx + dz * dz) <= eps
 }
 
 function setRemoteTarget(pubkey, pos) {
@@ -2143,7 +2177,11 @@ function handleNetMessage(fromPubkey, msg) {
       requestNostrProfile(p.pubkey)
       ensureAvatar(p.pubkey)
       setRemoteTarget(p.pubkey, p.pos)
-      if (p.pose) setPoseForPubkey(p.pubkey, p.pose)
+      if (p.pose === "sit" && p.sittingOn) {
+        setRemoteSitting(p.pubkey, p.sittingOn)
+      } else if (p.pose) {
+        setPoseForPubkey(p.pubkey, p.pose)
+      }
     }
     return
   }
@@ -2171,14 +2209,22 @@ function handleNetMessage(fromPubkey, msg) {
     requestNostrProfile(who)
     ensureAvatar(who)
     setRemoteTarget(who, msg.pos)
-    if (msg.pose) setPoseForPubkey(who, msg.pose)
+    if (msg.pose === "sit" && msg.sittingOn) {
+      setRemoteSitting(who, msg.sittingOn)
+    } else if (msg.pose) {
+      setPoseForPubkey(who, msg.pose)
+    }
     return
   }
 
   if (msg.type === "pos") {
     const who = msg.pubkey ?? fromPubkey
     ensureAvatar(who)
-    if (msg.pose) setPoseForPubkey(who, msg.pose)
+    if (msg.pose === "sit" && msg.sittingOn) {
+      setRemoteSitting(who, msg.sittingOn)
+    } else if (msg.pose) {
+      setPoseForPubkey(who, msg.pose)
+    }
     if (msg.tile && typeof msg.tile.x === "number" && typeof msg.tile.z === "number") {
       if (msg.pos && typeof msg.pos.x === "number" && typeof msg.pos.z === "number") {
         remoteTargets[who] = { pos: { x: msg.pos.x, z: msg.pos.z }, tile: msg.tile }
@@ -2242,7 +2288,9 @@ function handlePeerState(peer, state) {
       const players = Object.keys(avatars).map((pubkey) => {
         const av = avatars[pubkey]
         const p = snapToTileCenter({ x: av.position.x, z: av.position.z })
-        return { pubkey, name: getDisplayName(pubkey), pos: p, tile: toTileCoord(p), pose: av?.userData?.pose || "stand" }
+        const out = { pubkey, name: getDisplayName(pubkey), pos: p, tile: toTileCoord(p), pose: av?.userData?.pose || "stand" }
+        if (out.pose === "sit" && av?.userData?.sittingOnInstanceId) out.sittingOn = av.userData.sittingOnInstanceId
+        return out
       })
       net.sendTo(peer, { type: "snapshot", players })
 
@@ -2259,6 +2307,7 @@ function handlePeerState(peer, state) {
     } else {
       const hello = { type: "hello", name: myDisplayName, pos: snappedMyPos, tile: toTileCoord(snappedMyPos) }
       if (shouldIncludePoseInNet()) hello.pose = myPose
+      if (shouldIncludeSittingOnInNet()) hello.sittingOn = sittingOnInstanceId
       net.sendTo(currentRoom.ownerPubkey, hello)
     }
   } else if (state === "failed" || state === "disconnected" || state === "closed") {
@@ -2920,6 +2969,7 @@ async function init() {
           return
         }
       }
+      pendingSit = null
       standUpIfSitting()
       const w = floor.userData.tileToWorld(tile.x, tile.z)
       const target = { x: w.x, z: w.z }
@@ -2931,6 +2981,7 @@ async function init() {
     const p = hits[0].point
     const target = snapToTileCenter({ x: p.x, z: p.z })
     if (!isTileWalkable(target)) return
+    pendingSit = null
     standUpIfSitting()
     myTarget = target
   })
@@ -2991,7 +3042,9 @@ function animate() {
     const dist = Math.sqrt(dx * dx + dz * dz)
 
     if (dist > 0.02) {
-      standUpIfSitting()
+      if (myPose === "sit") {
+        standUpIfSitting()
+      }
       wasMoving = true
       const step = Math.min(dist, speed * dt)
       myAvatar.position.x += (dx / dist) * step
@@ -3009,10 +3062,12 @@ function animate() {
         if (currentRoom.isHost) {
           const out = { type: "pos", pos, tile, pubkey: myPubkey }
           if (shouldIncludePoseInNet()) out.pose = myPose
+          if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
           net.broadcast(out)
         } else {
           const out = { type: "pos", pos, tile }
           if (shouldIncludePoseInNet()) out.pose = myPose
+          if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
           net.broadcast(out)
         }
       }
@@ -3024,13 +3079,25 @@ function animate() {
         if (currentRoom.isHost) {
           const out = { type: "pos", pos, tile, pubkey: myPubkey }
           if (shouldIncludePoseInNet()) out.pose = myPose
+          if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
           net.broadcast(out)
         } else {
           const out = { type: "pos", pos, tile }
           if (shouldIncludePoseInNet()) out.pose = myPose
+          if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
           net.broadcast(out)
         }
       }
+    }
+
+    if (pendingSit && myPose !== "sit" && isNear(myTarget, pendingSit.approach)) {
+      setMyPose("sit", { sittingOn: pendingSit.instanceId })
+      applySitTransform(myAvatar, pendingSit.instanceId)
+      pendingSit = null
+    }
+
+    if (myPose === "sit" && sittingOnInstanceId) {
+      applySitTransform(myAvatar, sittingOnInstanceId)
     }
   }
 
@@ -3038,6 +3105,12 @@ function animate() {
     if (pubkey === myPubkey) continue
     const av = avatars[pubkey]
     if (!av) continue
+
+    if (av.userData?.pose === "sit" && av.userData?.sittingOnInstanceId) {
+      applySitTransform(av, av.userData.sittingOnInstanceId)
+      continue
+    }
+
     const tx = target?.pos?.x
     const tz = target?.pos?.z
     if (typeof tx !== "number" || typeof tz !== "number") continue
