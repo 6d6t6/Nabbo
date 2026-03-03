@@ -2325,7 +2325,7 @@ function makeTypingIndicatorSprite() {
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false })
   const spr = new THREE.Sprite(mat)
   spr.renderOrder = 10
-  spr.scale.set(1.2, 0.7, 1)
+  spr.scale.set(1.0, 0.7, 1)
   spr.position.set(0, 3.0, 0)
   return spr
 }
@@ -2347,6 +2347,8 @@ function setTypingIndicator(pubkey, active) {
 
 function broadcastMyTyping(active) {
   if (!net || !myPubkey) return
+  ensureAvatar(myPubkey)
+  setTypingIndicator(myPubkey, Boolean(active))
   const out = { type: "typing", active: Boolean(active), pubkey: myPubkey }
   if (currentRoom?.isHost) {
     handleNetMessage(myPubkey, out)
