@@ -1741,12 +1741,12 @@ function isTileCoordWalkable(tile, { allowBlocked = false } = {}) {
   return !blockedTileSet.has(k)
 }
 
-function findPathAStar(startTile, goalTile, { allowGoalBlocked = false } = {}) {
+function findPathAStar(startTile, goalTile, { allowGoalBlocked = false, allowStartBlocked = false } = {}) {
   if (!startTile || !goalTile) return null
   const startKey = tileKey(startTile.x, startTile.z)
   const goalKey = tileKey(goalTile.x, goalTile.z)
   if (startKey === goalKey) return [startTile]
-  if (!isTileCoordWalkable(startTile)) return null
+  if (!allowStartBlocked && !isTileCoordWalkable(startTile)) return null
   if (!isTileCoordWalkable(goalTile, { allowBlocked: allowGoalBlocked })) return null
 
   const open = new Set([startKey])
@@ -2315,13 +2315,15 @@ function trySitOnInstance(instanceId) {
   const chairWorld = snapToTileCenter(fromTileCoord(it.tile))
   if (!isTileCoordWalkable(it.tile, { allowBlocked: true })) return false
 
+  const wasSitting = myPose === "sit" && Boolean(sittingOnInstanceId)
+
   pendingSit = {
     instanceId,
     approach: chairWorld
   }
   setMyPose("stand")
   const startTile = toTileCoord({ x: myAvatar?.position?.x ?? 0, z: myAvatar?.position?.z ?? 0 })
-  myPath = findPathAStar(startTile, it.tile, { allowGoalBlocked: true })
+  myPath = findPathAStar(startTile, it.tile, { allowGoalBlocked: true, allowStartBlocked: wasSitting })
   if (!myPath || myPath.length === 0) return false
   if (myPath.length > 1) myPath.shift()
   const nextTile = myPath[0]
@@ -3313,7 +3315,8 @@ async function init() {
       const w = floor.userData.tileToWorld(tile.x, tile.z)
       const target = { x: w.x, z: w.z }
       const startTile = toTileCoord({ x: myAvatar?.position?.x ?? 0, z: myAvatar?.position?.z ?? 0 })
-      const path = findPathAStar(startTile, tile, { allowGoalBlocked: false })
+      const allowStartBlocked = myPose === "sit" && Boolean(sittingOnInstanceId)
+      const path = findPathAStar(startTile, tile, { allowGoalBlocked: false, allowStartBlocked })
       if (!path || path.length === 0) return
       myPath = path
       if (myPath.length > 1) myPath.shift()
@@ -3326,7 +3329,8 @@ async function init() {
     const target = snapToTileCenter({ x: p.x, z: p.z })
     const goalTile = toTileCoord(target)
     const startTile = toTileCoord({ x: myAvatar?.position?.x ?? 0, z: myAvatar?.position?.z ?? 0 })
-    const path = findPathAStar(startTile, goalTile, { allowGoalBlocked: false })
+    const allowStartBlocked = myPose === "sit" && Boolean(sittingOnInstanceId)
+    const path = findPathAStar(startTile, goalTile, { allowGoalBlocked: false, allowStartBlocked })
     if (!path || path.length === 0) return
     pendingSit = null
     standUpIfSitting()
