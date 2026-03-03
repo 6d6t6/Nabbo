@@ -2119,6 +2119,16 @@ function trySitOnInstance(instanceId) {
   return true
 }
 
+function getChairInstanceAtTile(tile) {
+  if (!tile) return ""
+  const at = getPlacedAtTile(tile)
+  for (const it of at) {
+    const def = getFurniDef(it.defId)
+    if (def?.actions?.includes?.("sit")) return it.instanceId
+  }
+  return ""
+}
+
 function applySitTransform(avatar, instanceId) {
   const it = placedItems.get(instanceId)
   if (!avatar || !it?.mesh || !it?.tile) return
@@ -2127,6 +2137,16 @@ function applySitTransform(avatar, instanceId) {
   avatar.position.z = chairWorld.z
   const baseY = typeof it.mesh.position?.y === "number" ? it.mesh.position.y : 0.5
   avatar.position.y = baseY + 0.6
+  const rot = Number(it.rot || 0) || 0
+  avatar.rotation.y = rot * (Math.PI / 2)
+}
+
+function faceToward(avatar, from, to) {
+  if (!avatar || !from || !to) return
+  const dx = (to.x || 0) - (from.x || 0)
+  const dz = (to.z || 0) - (from.z || 0)
+  if (Math.abs(dx) < 0.0001 && Math.abs(dz) < 0.0001) return
+  avatar.rotation.y = Math.atan2(dx, dz)
 }
 
 function isNear(a, b, eps = 0.06) {
@@ -2937,11 +2957,6 @@ async function init() {
     if (!isPlacing) {
       const id = pickPlacedInstanceFromEvent(e)
       if (id) {
-        if (!e.shiftKey && !(e.ctrlKey || e.metaKey)) {
-          if (trySitOnInstance(id)) {
-            return
-          }
-        }
         if (e.shiftKey) {
           sendRotateItem(id)
           return
@@ -2979,6 +2994,14 @@ async function init() {
           return
         }
       }
+
+      const chairId = getChairInstanceAtTile(tile)
+      if (chairId) {
+        if (trySitOnInstance(chairId)) {
+          return
+        }
+      }
+
       pendingSit = null
       standUpIfSitting()
       const w = floor.userData.tileToWorld(tile.x, tile.z)
@@ -3060,6 +3083,7 @@ function animate() {
       if (myPose === "sit") {
         standUpIfSitting()
       }
+      faceToward(myAvatar, { x: myAvatar.position.x, z: myAvatar.position.z }, myTarget)
       wasMoving = true
       const step = Math.min(dist, speed * dt)
       myAvatar.position.x += (dx / dist) * step
@@ -3134,6 +3158,8 @@ function animate() {
     const lerp = 0.22
     const nx = av.position.x + dx * lerp
     const nz = av.position.z + dz * lerp
+
+    faceToward(av, { x: av.position.x, z: av.position.z }, { x: tx, z: tz })
 
     const finalTile = target.tile
     if (finalTile && typeof finalTile.x === "number" && typeof finalTile.z === "number") {

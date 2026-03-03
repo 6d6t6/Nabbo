@@ -79,8 +79,16 @@ export function createAvatar(scene, pubkey) {
 
   group.userData.parts = { head, hair, torso, hips, legs }
   group.userData.pose = "stand"
-  group.userData.poseYOffset = 1
+  group.userData.poseYOffset = 0
   group.userData.appearance = normalizeAppearance(null)
+
+  group.userData.restPose = {
+    head: { pos: head.position.clone(), rot: head.rotation.clone() },
+    hair: { pos: hair.position.clone(), rot: hair.rotation.clone() },
+    torso: { pos: torso.position.clone(), rot: torso.rotation.clone() },
+    hips: { pos: hips.position.clone(), rot: hips.rotation.clone() },
+    legs: { pos: legs.position.clone(), rot: legs.rotation.clone() }
+  }
 
   group.position.y = 0
   scene.add(group)
@@ -94,7 +102,32 @@ export function setAvatarPose(avatar, pose) {
   if (!avatar) return
   const p = pose === "sit" ? "sit" : "stand"
   avatar.userData.pose = p
-  avatar.userData.poseYOffset = p === "sit" ? -0.35 : 0
+  avatar.userData.poseYOffset = 0
+
+  const parts = avatar.userData?.parts
+  const rest = avatar.userData?.restPose
+  if (!parts || !rest) return
+
+  const reset = () => {
+    for (const k of ["head", "hair", "torso", "hips", "legs"]) {
+      const part = parts[k]
+      const r = rest[k]
+      if (!part || !r) continue
+      part.position.copy(r.pos)
+      part.rotation.copy(r.rot)
+    }
+  }
+
+  reset()
+
+  if (p === "sit") {
+    parts.torso.position.y = 1.05
+    parts.hips.position.y = 0.72
+
+    parts.legs.rotation.x = -Math.PI / 2
+    parts.legs.position.y = 0.55
+    parts.legs.position.z = 0.36
+  }
 }
 
 export function setAvatarAppearance(avatar, appearance) {
