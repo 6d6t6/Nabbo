@@ -273,7 +273,7 @@ function renderCatalog() {
   const visible = catalog.filter((it) => selectedCat === "All" || (it.category || "Other") === selectedCat)
   for (const it of visible) {
     const card = document.createElement("div")
-    card.className = "card"
+    card.className = "item"
     card.classList.toggle("selected", selectedCatalogDefId === it.defId)
 
     const thumb = document.createElement("div")
@@ -356,6 +356,37 @@ function renderCatalog() {
     }
     card.appendChild(btn)
     catalogEl.appendChild(card)
+  }
+}
+
+function ensureShopCategories() {
+  if (!shopCategoriesEl) return
+  shopCategoriesEl.innerHTML = ""
+
+  const cats = [
+    "All",
+    ...Array.from(
+      new Set(
+        (catalog || []).map((it) => String(it?.category || "Other")).filter((c) => c && c !== "All")
+      )
+    ).sort((a, b) => a.localeCompare(b))
+  ]
+
+  const current = String(selectedShopCategory || "All").trim() || "All"
+  if (!cats.includes(current)) selectedShopCategory = "All"
+
+  for (const c of cats) {
+    const btn = document.createElement("button")
+    btn.type = "button"
+    btn.className = "shop-cat"
+    btn.textContent = c
+    btn.classList.toggle("selected", c === selectedShopCategory)
+    btn.onclick = () => {
+      selectedShopCategory = c
+      ensureShopCategories()
+      renderCatalog()
+    }
+    shopCategoriesEl.appendChild(btn)
   }
 }
 
