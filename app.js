@@ -877,8 +877,11 @@ function getFurniThumbUrl(defId, size = 64) {
   try {
     const { renderer, canvas, size: s } = ensureThumbRenderer(size)
     const sceneT = new THREE.Scene()
-    const cam = new THREE.PerspectiveCamera(40, 1, 0.01, 20)
-    cam.position.set(1.7, 1.7, 1.7)
+    const cam = new THREE.OrthographicCamera(-1.2, 1.2, 1.2, -1.2, 0.01, 50)
+    cam.rotation.order = "YXZ"
+    cam.rotation.y = Math.PI / 4
+    cam.rotation.x = -Math.atan(1 / Math.sqrt(2))
+    cam.position.set(3.0, 3.0, 3.0)
     cam.lookAt(0, 0.4, 0)
 
     const mesh = createFurniMesh(defId)
@@ -889,11 +892,10 @@ function getFurniThumbUrl(defId, size = 64) {
     box.getCenter(center)
 
     const maxDim = Math.max(sizeV.x, sizeV.y, sizeV.z) || 1
-    const scale = 1.1 / maxDim
+    const scale = 1.6 / maxDim
     mesh.scale.setScalar(scale)
     mesh.position.sub(center.multiplyScalar(scale))
 
-    mesh.rotation.y = Math.PI / 4
     sceneT.add(mesh)
 
     renderer.setClearColor(0x000000, 0)
@@ -1026,7 +1028,6 @@ function tryPlaceSelectedAtTile(tile) {
   if (placementStackDefId && placementStackDefId === inv.defId) {
     const placedIds = new Set(Array.from(placedItems.keys()))
     const next = Array.from(inventoryItems.values())
-      .filter((x) => x?.toPubkey?.toLowerCase?.() === myPubkey?.toLowerCase?.())
       .filter((x) => x?.defId === placementStackDefId)
       .filter((x) => x?.instanceId && !placedIds.has(x.instanceId))
       .sort((a, b) => (b.ts || 0) - (a.ts || 0))[0]
