@@ -2394,6 +2394,7 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
 
   myAvatar = ensureAvatar(myPubkey)
   setAvatarPose(myAvatar, myPose)
+  if (myAppearance) setAvatarAppearance(myAvatar, myAppearance)
   const startPos = snapToTileCenter(getSpawnPos())
   updateAvatarPosition(myAvatar, startPos)
   myTarget = { x: startPos.x, z: startPos.z }
