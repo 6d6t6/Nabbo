@@ -273,7 +273,7 @@ function renderCatalog() {
   const visible = catalog.filter((it) => selectedCat === "All" || (it.category || "Other") === selectedCat)
   for (const it of visible) {
     const card = document.createElement("div")
-    card.className = "item"
+    card.className = "card"
     card.classList.toggle("selected", selectedCatalogDefId === it.defId)
 
     const thumb = document.createElement("div")
@@ -356,37 +356,6 @@ function renderCatalog() {
     }
     card.appendChild(btn)
     catalogEl.appendChild(card)
-  }
-}
-
-function ensureShopCategories() {
-  if (!shopCategoriesEl) return
-  shopCategoriesEl.innerHTML = ""
-
-  const cats = [
-    "All",
-    ...Array.from(
-      new Set(
-        (catalog || []).map((it) => String(it?.category || "Other")).filter((c) => c && c !== "All")
-      )
-    ).sort((a, b) => a.localeCompare(b))
-  ]
-
-  const current = String(selectedShopCategory || "All").trim() || "All"
-  if (!cats.includes(current)) selectedShopCategory = "All"
-
-  for (const c of cats) {
-    const btn = document.createElement("button")
-    btn.type = "button"
-    btn.className = "shop-cat"
-    btn.textContent = c
-    btn.classList.toggle("selected", c === selectedShopCategory)
-    btn.onclick = () => {
-      selectedShopCategory = c
-      ensureShopCategories()
-      renderCatalog()
-    }
-    shopCategoriesEl.appendChild(btn)
   }
 }
 
@@ -610,23 +579,6 @@ function teardownRoom({ reason = null, showLobby = true } = {}) {
     chatBubbles = []
   }
 
-  if (typingBubbles.size) {
-    for (const b of typingBubbles.values()) {
-      try {
-        b.el.remove()
-      } catch {}
-    }
-    typingBubbles.clear()
-  }
-
-  if (typingStopTimer) {
-    clearTimeout(typingStopTimer)
-    typingStopTimer = null
-  }
-  myTyping = false
-  myLastTypingInputAt = 0
-  lastTypingBroadcastAt = 0
-
   setInRoom(false)
   updateFurniAccessUi()
   if (showLobby) {
@@ -731,6 +683,69 @@ async function flushItemLocationPublishes() {
     } catch {}
   }
   renderInventory()
+}
+
+function pickPlacedInstanceFromEvent(e) {
+  if (!raycaster || !mouse || !camera) return ""
+  if (!placedGroup) return ""
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1
+  raycaster.setFromCamera(mouse, camera)
+  const hits = raycaster.intersectObject(placedGroup, true)
+  const id = hits?.[0]?.object?.userData?.instanceId
+  return typeof id === "string" ? id : ""
+}
+
+function sendRotateItem(instanceId) {
+  if (!instanceId || !net) return
+  if (!currentRoom?.isHost) return
+  const it = placedItems.get(instanceId)
+  if (!it) return
+  const nextRot = ((Number(it.rot || 0) || 0) + 1) % 4
+  if (currentRoom?.isHost) {
+    updatePlacedLocal({ instanceId, rot: nextRot })
+    net.broadcast({ type: "item_rotated", item: { instanceId, rot: nextRot } })
+  } else {
+    net.broadcast({ type: "rotate_item", item: { instanceId, rot: nextRot } })
+  }
+}
+
+function sendPickupItem(instanceId) {
+  if (!instanceId || !net) return
+  if (!currentRoom?.isHost) return
+  if (currentRoom?.isHost) {
+    removePlacedLocal(instanceId)
+    net.broadcast({ type: "item_picked_up", instanceId })
+  } else {
+    net.broadcast({ type: "pickup_item", instanceId })
+  }
+}
+
+function sendMoveItem(instanceId, tile) {
+  if (!instanceId || !net) return
+  if (!currentRoom?.isHost) return
+  if (!tile || typeof tile.x !== "number" || typeof tile.z !== "number") return
+  if (currentRoom?.isHost) {
+    updatePlacedLocal({ instanceId, tile })
+    net.broadcast({ type: "item_moved", item: { instanceId, tile } })
+  } else {
+    net.broadcast({ type: "move_item", item: { instanceId, tile } })
+  }
+}
+
+function publishPlacedItemLocationsSoon() {
+  if (!currentRoom?.isHost) return
+  if (!currentRoom?.roomId) return
+  for (const it of placedItems.values()) {
+    if (!it?.instanceId || !it?.tile) continue
+    queueItemLocationPublish(it.instanceId, {
+      state: "placed",
+      roomId: currentRoom.roomId,
+      tile: it.tile,
+      rot: it.rot || 0,
+      stackIndex: it.stackIndex || 0
+    })
+  }
 }
 
 function colorFromString(s) {
@@ -969,13 +984,6 @@ let suppressDisconnectUntil = 0
 
 let chatBubbleLayer = null
 let chatBubbles = []
-
-let typingBubbleLayer = null
-const typingBubbles = new Map()
-let myTyping = false
-let myLastTypingInputAt = 0
-let typingStopTimer = null
-let lastTypingBroadcastAt = 0
 
 let myDisplayName = ""
 const playerNames = {}
@@ -1298,6 +1306,27 @@ function updateGhostFromMouseEvent(e) {
     ghostItem.position.y = stackIndex * step
   } else {
     ghostItem.position.y = 0
+  }
+}
+
+function ensureShopCategories() {
+  if (!shopCategoriesEl) return
+  const cats = Array.from(new Set(catalog.map((x) => x.category || "Other")))
+  cats.sort((a, b) => a.localeCompare(b))
+  const all = ["All", ...cats]
+  shopCategoriesEl.innerHTML = ""
+  for (const c of all) {
+    const btn = document.createElement("button")
+    btn.type = "button"
+    btn.className = "shop-cat"
+    btn.textContent = c
+    btn.classList.toggle("selected", String(selectedShopCategory) === String(c))
+    btn.onclick = () => {
+      selectedShopCategory = c
+      ensureShopCategories()
+      renderCatalog()
+    }
+    shopCategoriesEl.appendChild(btn)
   }
 }
 
@@ -1681,10 +1710,6 @@ function setInRoom(inRoom) {
   if (chatBubbleLayer) {
     chatBubbleLayer.style.display = inRoom ? "block" : "none"
   }
-
-  if (typingBubbleLayer) {
-    typingBubbleLayer.style.display = inRoom ? "block" : "none"
-  }
 }
 
 function snapToTileCenter(pos) {
@@ -1918,108 +1943,6 @@ function ensureChatBubbleLayer() {
   chatBubbleLayer.style.overflow = "hidden"
   chatBubbleLayer.style.display = document.body.classList.contains("in-room") ? "block" : "none"
   document.body.appendChild(chatBubbleLayer)
-}
-
-function ensureTypingBubbleLayer() {
-  if (typingBubbleLayer) return
-
-  typingBubbleLayer = document.createElement("div")
-  typingBubbleLayer.id = "typingBubbles"
-  typingBubbleLayer.style.position = "absolute"
-  typingBubbleLayer.style.left = "0"
-  typingBubbleLayer.style.top = "0"
-  typingBubbleLayer.style.width = "100%"
-  typingBubbleLayer.style.height = "100%"
-  typingBubbleLayer.style.pointerEvents = "none"
-  typingBubbleLayer.style.overflow = "hidden"
-  typingBubbleLayer.style.display = document.body.classList.contains("in-room") ? "block" : "none"
-  document.body.appendChild(typingBubbleLayer)
-}
-
-function setTypingForPubkey(pubkey, isTyping) {
-  if (!pubkey) return
-  ensureTypingBubbleLayer()
-
-  if (!isTyping) {
-    const b = typingBubbles.get(pubkey)
-    if (b) {
-      try {
-        b.el.remove()
-      } catch {}
-      typingBubbles.delete(pubkey)
-    }
-    return
-  }
-
-  const now = performance.now()
-  const existing = typingBubbles.get(pubkey)
-  if (existing) {
-    existing.expiresAt = now + 5_500
-    return
-  }
-
-  const el = document.createElement("div")
-  el.className = "typing-bubble"
-  el.textContent = "typing…"
-  typingBubbleLayer.appendChild(el)
-
-  typingBubbles.set(pubkey, {
-    pubkey,
-    el,
-    expiresAt: now + 5_500,
-    x: 0,
-    y: 0
-  })
-}
-
-function updateTypingBubbles() {
-  if (!typingBubbleLayer || !camera || !renderer) return
-
-  const now = performance.now()
-
-  for (const [pubkey, b] of typingBubbles.entries()) {
-    if (b.expiresAt && now >= b.expiresAt) {
-      try {
-        b.el.remove()
-      } catch {}
-      typingBubbles.delete(pubkey)
-      continue
-    }
-
-    const av = avatars[pubkey]
-    if (!av) {
-      b.el.style.display = "none"
-      continue
-    }
-
-    const world = new THREE.Vector3(av.position.x, av.position.y + 2.55, av.position.z)
-    const projected = world.project(camera)
-
-    const x = (projected.x * 0.5 + 0.5) * renderer.domElement.clientWidth
-    const y = (-(projected.y * 0.5) + 0.5) * renderer.domElement.clientHeight
-
-    b.x = x
-    b.y = y
-    b.el.style.display = "block"
-    b.el.style.transform = `translate(-50%, -100%) translate(${x}px, ${y}px)`
-  }
-}
-
-function broadcastTyping(isTyping) {
-  if (!net) return
-  if (!currentRoom) return
-
-  const out = { type: "typing", typing: Boolean(isTyping) }
-  if (currentRoom.isHost) out.pubkey = myPubkey
-  handleNetMessage(myPubkey, { ...out, pubkey: myPubkey })
-  net.broadcast(out)
-}
-
-function setMyTyping(isTyping) {
-  const next = Boolean(isTyping)
-  if (next === myTyping) return
-  myTyping = next
-  broadcastTyping(next)
 }
 
 function spawnChatBubble(pubkey, text) {
@@ -2492,12 +2415,6 @@ function handleNetMessage(fromPubkey, msg) {
     return
   }
 
-  if (msg.type === "typing") {
-    const who = msg.pubkey ?? fromPubkey
-    if (who) setTypingForPubkey(who, Boolean(msg.typing))
-    return
-  }
-
   if (msg.type === "snapshot" && Array.isArray(msg.players)) {
     for (const p of msg.players) {
       if (!p?.pubkey || !p?.pos) continue
@@ -2647,8 +2564,6 @@ function handlePeerState(peer, state) {
           dir: getDir8FromYaw(av?.rotation?.y || 0)
         }
         if (out.pose === "sit" && av?.userData?.sittingOnInstanceId) out.sittingOn = av.userData.sittingOnInstanceId
-        const app = appearances[pubkey]
-        if (app) out.appearance = app
         return out
       })
       net.sendTo(peer, { type: "snapshot", players })
@@ -2799,30 +2714,24 @@ async function startRoom({ roomId, code, name, plan, door, entryDir, ownerPubkey
 
           const players = Object.keys(avatars).map((pubkey) => {
             const av = avatars[pubkey]
-            const p = snapToTileCenter({ x: av.position.x, z: av.position.z })
-            const out = {
+            const pos = snapToTileCenter({ x: av.position.x, z: av.position.z })
+            const p = {
               pubkey,
               name: getDisplayName(pubkey),
-              pos: p,
-              tile: toTileCoord(p),
+              pos,
+              tile: toTileCoord(pos),
               pose: av?.userData?.pose || "stand",
               dir: getDir8FromYaw(av?.rotation?.y || 0)
             }
-            if (out.pose === "sit" && av?.userData?.sittingOnInstanceId) out.sittingOn = av.userData.sittingOnInstanceId
+            if (p.pose === "sit" && av?.userData?.sittingOnInstanceId) p.sittingOn = av.userData.sittingOnInstanceId
             const app = appearances[pubkey]
-            if (app) out.appearance = app
-            return out
+            if (app) p.appearance = app
+            return p
           })
           net.sendTo(peer, { type: "snapshot", players })
           return
         }
         if (msg.type === "chat") {
-          const out = { ...msg, pubkey: peer }
-          handleNetMessage(peer, out)
-          net.broadcast(out)
-          return
-        }
-        if (msg.type === "typing") {
           const out = { ...msg, pubkey: peer }
           handleNetMessage(peer, out)
           net.broadcast(out)
@@ -3224,11 +3133,6 @@ async function init() {
     const msg = chatInput.value.trim()
     if (!msg) return
     chatInput.value = ""
-    setMyTyping(false)
-    if (typingStopTimer) {
-      clearTimeout(typingStopTimer)
-      typingStopTimer = null
-    }
 
     if (!net) return
 
@@ -3246,31 +3150,6 @@ async function init() {
     if (e.shiftKey) return
     e.preventDefault()
     sendBtn.click()
-  })
-
-  chatInput.addEventListener("input", () => {
-    if (!chatInput.value.trim()) {
-      setMyTyping(false)
-      if (typingStopTimer) {
-        clearTimeout(typingStopTimer)
-        typingStopTimer = null
-      }
-      return
-    }
-
-    const now = performance.now()
-    if (now - myLastTypingInputAt < 100) return
-    myLastTypingInputAt = now
-    setMyTyping(true)
-    if (typingStopTimer) clearTimeout(typingStopTimer)
-    typingStopTimer = setTimeout(() => {
-      typingStopTimer = null
-      setMyTyping(false)
-    }, 5000)
-  })
-
-  chatInput.addEventListener("blur", () => {
-    setMyTyping(false)
   })
 
   raycaster = new THREE.Raycaster()
@@ -3556,7 +3435,6 @@ function animate() {
   lastAnimAt = now
 
   updateChatBubbles()
-  updateTypingBubbles()
 
   if (myAvatar && currentRoom) {
     const speed = 3.0
