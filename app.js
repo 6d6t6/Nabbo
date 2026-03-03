@@ -965,6 +965,8 @@ let sittingOnInstanceId = ""
 
 let pendingSit = null
 
+let myPath = null
+
 let roomAnnounceInterval = null
 
 const PUBLIC_ROOM_TTL_MS = 60_000
@@ -1092,7 +1094,7 @@ let pendingLocTimer = null
 let blockedTileSet = new Set()
 
 const furniDefs = {
-  chair_basic: { height: 0.9, footprint: { w: 1, d: 1 }, blocksMovement: false, stackable: false, actions: ["sit"] },
+  chair_basic: { height: 0.9, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: ["sit"] },
   table_basic: { height: 0.8, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: [] },
   plant_basic: { height: 1.1, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: true, stackHeightStep: 0.55, actions: [] }
 }
@@ -1728,6 +1730,108 @@ function isTileWalkable(pos) {
   return !blockedTileSet.has(tileKey(t.x, t.z))
 }
 
+function isTileCoordWalkable(tile, { allowBlocked = false } = {}) {
+  if (!tile) return false
+  if (!floor?.userData?.tileSet) return true
+  const k = tileKey(tile.x, tile.z)
+  if (!floor.userData.tileSet.has(k)) return false
+  if (allowBlocked) return true
+  return !blockedTileSet.has(k)
+}
+
+function findPathAStar(startTile, goalTile, { allowGoalBlocked = false } = {}) {
+  if (!startTile || !goalTile) return null
+  const startKey = tileKey(startTile.x, startTile.z)
+  const goalKey = tileKey(goalTile.x, goalTile.z)
+  if (startKey === goalKey) return [startTile]
+  if (!isTileCoordWalkable(startTile)) return null
+  if (!isTileCoordWalkable(goalTile, { allowBlocked: allowGoalBlocked })) return null
+
+  const open = new Set([startKey])
+  const cameFrom = new Map()
+  const gScore = new Map([[startKey, 0]])
+  const fScore = new Map([[startKey, 0]])
+
+  const h = (a, b) => {
+    const dx = Math.abs(a.x - b.x)
+    const dz = Math.abs(a.z - b.z)
+    return Math.max(dx, dz)
+  }
+  fScore.set(startKey, h(startTile, goalTile))
+
+  const parseKey = (k) => {
+    const [x, z] = k.split(",").map((n) => Number(n))
+    return { x, z }
+  }
+
+  const neighbors = (t) => {
+    const out = []
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (dx === 0 && dz === 0) continue
+        const nt = { x: t.x + dx, z: t.z + dz }
+        const diag = dx !== 0 && dz !== 0
+        if (diag) {
+          const a = { x: t.x + dx, z: t.z }
+          const b = { x: t.x, z: t.z + dz }
+          if (!isTileCoordWalkable(a)) continue
+          if (!isTileCoordWalkable(b)) continue
+        }
+        const allowBlocked = allowGoalBlocked && tileKey(nt.x, nt.z) === goalKey
+        if (!isTileCoordWalkable(nt, { allowBlocked })) continue
+        out.push(nt)
+      }
+    }
+    return out
+  }
+
+  const dist = (a, b) => {
+    const dx = Math.abs(a.x - b.x)
+    const dz = Math.abs(a.z - b.z)
+    return dx !== 0 && dz !== 0 ? 1.4142 : 1
+  }
+
+  while (open.size) {
+    let currentKey = null
+    let bestF = Infinity
+    for (const k of open) {
+      const f = fScore.get(k) ?? Infinity
+      if (f < bestF) {
+        bestF = f
+        currentKey = k
+      }
+    }
+    if (!currentKey) break
+    if (currentKey === goalKey) {
+      const path = []
+      let ck = currentKey
+      while (ck) {
+        path.push(parseKey(ck))
+        ck = cameFrom.get(ck)
+      }
+      path.reverse()
+      return path
+    }
+
+    open.delete(currentKey)
+    const current = parseKey(currentKey)
+    const currentG = gScore.get(currentKey) ?? Infinity
+    for (const nb of neighbors(current)) {
+      const nbKey = tileKey(nb.x, nb.z)
+      const tentativeG = currentG + dist(current, nb)
+      const prevG = gScore.get(nbKey)
+      if (prevG == null || tentativeG < prevG) {
+        cameFrom.set(nbKey, currentKey)
+        gScore.set(nbKey, tentativeG)
+        fScore.set(nbKey, tentativeG + h(nb, goalTile))
+        open.add(nbKey)
+      }
+    }
+  }
+
+  return null
+}
+
 function fromTileCoord(tile) {
   const ttw = floor?.userData?.tileToWorld
   if (ttw) {
@@ -2207,14 +2311,19 @@ function trySitOnInstance(instanceId) {
   if (!it.tile) return false
 
   const chairWorld = snapToTileCenter(fromTileCoord(it.tile))
-  if (!isTileWalkable(chairWorld)) return false
+  if (!isTileCoordWalkable(it.tile, { allowBlocked: true })) return false
 
   pendingSit = {
     instanceId,
     approach: chairWorld
   }
   setMyPose("stand")
-  myTarget = pendingSit.approach
+  const startTile = toTileCoord({ x: myAvatar?.position?.x ?? 0, z: myAvatar?.position?.z ?? 0 })
+  myPath = findPathAStar(startTile, it.tile, { allowGoalBlocked: true })
+  if (!myPath || myPath.length === 0) return false
+  if (myPath.length > 1) myPath.shift()
+  const nextTile = myPath[0]
+  myTarget = snapToTileCenter(fromTileCoord(nextTile))
   return true
 }
 
@@ -2364,13 +2473,11 @@ function handleNetMessage(fromPubkey, msg) {
       if (remoteTargets[who]) remoteTargets[who].dir = msg.dir
     }
     if (msg.tile && typeof msg.tile.x === "number" && typeof msg.tile.z === "number") {
-      if (msg.pos && typeof msg.pos.x === "number" && typeof msg.pos.z === "number") {
-        setRemoteTarget(who, msg.pos)
-      } else {
-        setRemoteTargetTile(who, msg.tile)
-      }
+      setRemoteTargetTile(who, msg.tile)
+      if (remoteTargets[who] && typeof msg.dir === "number") remoteTargets[who].dir = msg.dir
     } else if (msg.pos && typeof msg.pos.x === "number" && typeof msg.pos.z === "number") {
       setRemoteTarget(who, msg.pos)
+      if (remoteTargets[who] && typeof msg.dir === "number") remoteTargets[who].dir = msg.dir
     }
     return
   }
@@ -3195,17 +3302,28 @@ async function init() {
       standUpIfSitting()
       const w = floor.userData.tileToWorld(tile.x, tile.z)
       const target = { x: w.x, z: w.z }
-      if (!isTileWalkable(target)) return
-      myTarget = target
+      const startTile = toTileCoord({ x: myAvatar?.position?.x ?? 0, z: myAvatar?.position?.z ?? 0 })
+      const path = findPathAStar(startTile, tile, { allowGoalBlocked: false })
+      if (!path || path.length === 0) return
+      myPath = path
+      if (myPath.length > 1) myPath.shift()
+      const nextTile = myPath[0]
+      myTarget = snapToTileCenter(fromTileCoord(nextTile))
       return
     }
 
     const p = hits[0].point
     const target = snapToTileCenter({ x: p.x, z: p.z })
-    if (!isTileWalkable(target)) return
+    const goalTile = toTileCoord(target)
+    const startTile = toTileCoord({ x: myAvatar?.position?.x ?? 0, z: myAvatar?.position?.z ?? 0 })
+    const path = findPathAStar(startTile, goalTile, { allowGoalBlocked: false })
+    if (!path || path.length === 0) return
     pendingSit = null
     standUpIfSitting()
-    myTarget = target
+    myPath = path
+    if (myPath.length > 1) myPath.shift()
+    const nextTile = myPath[0]
+    myTarget = snapToTileCenter(fromTileCoord(nextTile))
   })
 
   renderPublicRooms()
@@ -3278,6 +3396,8 @@ function animate() {
       if (myPose === "sit") {
         standUpIfSitting()
       }
+      const yaw = quantizeYawTo8(Math.atan2(dx, dz))
+      myAvatar.rotation.y = yaw
       faceToward(myAvatar, { x: myAvatar.position.x, z: myAvatar.position.z }, myTarget)
       wasMoving = true
       const step = Math.min(dist, speed * dt)
@@ -3309,6 +3429,15 @@ function animate() {
       }
     } else if (wasMoving) {
       wasMoving = false
+      if (myPath && Array.isArray(myPath) && myPath.length) {
+        myPath.shift()
+        if (myPath.length) {
+          const nextTile = myPath[0]
+          myTarget = snapToTileCenter(fromTileCoord(nextTile))
+        } else {
+          myPath = null
+        }
+      }
       if (myTarget) {
         const pos = { x: myTarget.x, z: myTarget.z }
         const tile = toTileCoord(myTarget)
@@ -3345,17 +3474,25 @@ function animate() {
       continue
     }
 
-    const tx = target?.pos?.x
-    const tz = target?.pos?.z
+    let tx = target?.pos?.x
+    let tz = target?.pos?.z
+    const finalTile = target?.tile
+    if (finalTile && typeof finalTile.x === "number" && typeof finalTile.z === "number") {
+      const fp = fromTileCoord(finalTile)
+      tx = fp.x
+      tz = fp.z
+    }
     if (typeof tx !== "number" || typeof tz !== "number") continue
 
     const dx = tx - av.position.x
     const dz = tz - av.position.z
     const dist = Math.sqrt(dx * dx + dz * dz)
 
-    const lerp = 0.22
-    const nx = av.position.x + dx * lerp
-    const nz = av.position.z + dz * lerp
+    const speed = 3.0
+    const dt = 1 / 60
+    const step = Math.min(dist, speed * dt)
+    const nx = dist > 0.0001 ? av.position.x + (dx / dist) * step : av.position.x
+    const nz = dist > 0.0001 ? av.position.z + (dz / dist) * step : av.position.z
 
     if (typeof target?.dir === "number") {
       av.rotation.y = yawFromDir8(target.dir)
@@ -3363,7 +3500,6 @@ function animate() {
       faceToward(av, { x: av.position.x, z: av.position.z }, { x: tx, z: tz })
     }
 
-    const finalTile = target.tile
     if (finalTile && typeof finalTile.x === "number" && typeof finalTile.z === "number") {
       const fp = fromTileCoord(finalTile)
       const fdx = fp.x - nx
