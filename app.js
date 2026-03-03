@@ -2057,6 +2057,9 @@ function setPoseForPubkey(pubkey, pose) {
   const av = avatars[pubkey]
   if (!av) return
   setAvatarPose(av, pose)
+  if (pose !== "sit" && av?.userData) {
+    av.userData.sittingOnInstanceId = ""
+  }
 }
 
 function setRemoteSitting(pubkey, instanceId) {
@@ -2295,7 +2298,7 @@ function handlePeerState(peer, state) {
       }
     } else {
       const hello = { type: "hello", name: myDisplayName, pos: snappedMyPos, tile: toTileCoord(snappedMyPos) }
-      if (shouldIncludePoseInNet()) hello.pose = myPose
+      hello.pose = myPose
       if (shouldIncludeSittingOnInNet()) hello.sittingOn = sittingOnInstanceId
       net.sendTo(currentRoom.ownerPubkey, hello)
     }
@@ -3055,12 +3058,12 @@ function animate() {
         const tile = toTileCoord(myTarget)
         if (currentRoom.isHost) {
           const out = { type: "pos", pos, tile, pubkey: myPubkey }
-          if (shouldIncludePoseInNet()) out.pose = myPose
+          out.pose = myPose
           if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
           net.broadcast(out)
         } else {
           const out = { type: "pos", pos, tile }
-          if (shouldIncludePoseInNet()) out.pose = myPose
+          out.pose = myPose
           if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
           net.broadcast(out)
         }
@@ -3072,12 +3075,12 @@ function animate() {
         const tile = toTileCoord(myTarget)
         if (currentRoom.isHost) {
           const out = { type: "pos", pos, tile, pubkey: myPubkey }
-          if (shouldIncludePoseInNet()) out.pose = myPose
+          out.pose = myPose
           if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
           net.broadcast(out)
         } else {
           const out = { type: "pos", pos, tile }
-          if (shouldIncludePoseInNet()) out.pose = myPose
+          out.pose = myPose
           if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
           net.broadcast(out)
         }
