@@ -1,7 +1,7 @@
 import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js'
 import { initNostr, publish, subscribe, list, getPubkey, getNip98AuthHeader } from "./nostr.js"
 import { createRoom } from './room.js'
-import { createAvatar, updateAvatarPosition } from './avatar.js'
+import { createAvatar, updateAvatarPosition, setAvatarPose } from './avatar.js'
 import { NabboNet, createRoomId, roomIdToCode } from "./webrtc.js"
 import { createWindowManager } from "./ui/windowManager.js"
 import { createDisconnectModal } from "./ui/disconnectModal.js"
@@ -15,6 +15,10 @@ let raycaster
 let mouse
 
 let avatars = {}
+
+function shouldIncludePoseInNet() {
+  return myPose === "sit"
+}
 
 function updateFurniAccessUi() {
   const host = Boolean(currentRoom?.isHost)
@@ -817,7 +821,8 @@ async function saveRoomFurni() {
     instanceId: it.instanceId,
     defId: it.defId,
     tile: it.tile,
-    rot: it.rot || 0
+    rot: it.rot || 0,
+    stackIndex: it.stackIndex || 0
   }))
   const contentObj = {
     type: "nabbo_room_state",
@@ -849,7 +854,7 @@ async function loadRoomFurni(roomId) {
   if (!Array.isArray(obj.items)) return []
   return obj.items
     .filter((it) => it?.instanceId && it?.defId && it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number")
-    .map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile, rot: it.rot || 0 }))
+    .map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile, rot: it.rot || 0, stackIndex: it.stackIndex || 0 }))
 }
 
 const win = createWindowManager({ initialZ: 50, bottomMargin: 70 })
@@ -861,6 +866,9 @@ let myAvatar
 let myTarget = { x: 0, z: 0 }
 let lastSentPosAt = 0
 let wasMoving = false
+
+let myPose = "stand"
+let sittingOnInstanceId = ""
 
 let roomAnnounceInterval = null
 
@@ -2039,6 +2047,63 @@ function ensureAvatar(pubkey) {
   return avatars[pubkey]
 }
 
+function setPoseForPubkey(pubkey, pose) {
+  const av = avatars[pubkey]
+  if (!av) return
+  setAvatarPose(av, pose)
+}
+
+function setMyPose(pose, { sittingOn = "" } = {}) {
+  const p = pose === "sit" ? "sit" : "stand"
+  myPose = p
+  sittingOnInstanceId = p === "sit" ? String(sittingOn || "") : ""
+  if (myAvatar) setAvatarPose(myAvatar, p)
+}
+
+function standUpIfSitting() {
+  if (myPose !== "sit") return
+  setMyPose("stand")
+}
+
+function getPlacedAtTile(tile) {
+  if (!tile) return []
+  const out = []
+  for (const it of placedItems.values()) {
+    if (!it?.tile) continue
+    if (it.tile.x === tile.x && it.tile.z === tile.z) out.push(it)
+  }
+  out.sort((a, b) => (Number(b.stackIndex || 0) || 0) - (Number(a.stackIndex || 0) || 0))
+  return out
+}
+
+function trySitOnInstance(instanceId) {
+  if (!currentRoom) return false
+  const it = placedItems.get(instanceId)
+  if (!it) return false
+  const def = getFurniDef(it.defId)
+  if (!def?.actions?.includes?.("sit")) return false
+  if (!it.tile) return false
+
+  const base = it.tile
+  const candidates = [
+    { x: base.x + 1, z: base.z },
+    { x: base.x - 1, z: base.z },
+    { x: base.x, z: base.z + 1 },
+    { x: base.x, z: base.z - 1 }
+  ]
+
+  for (const t of candidates) {
+    const w = fromTileCoord(t)
+    if (!isTileWalkable(w)) continue
+    myTarget = snapToTileCenter(w)
+    updateAvatarPosition(myAvatar, myTarget)
+    setMyPose("sit", { sittingOn: instanceId })
+    return true
+  }
+
+  return false
+}
+
 function setRemoteTarget(pubkey, pos) {
   const snapped = snapToTileCenter(pos)
   const clamped = clampToWalkable(snapped)
@@ -2078,6 +2143,7 @@ function handleNetMessage(fromPubkey, msg) {
       requestNostrProfile(p.pubkey)
       ensureAvatar(p.pubkey)
       setRemoteTarget(p.pubkey, p.pos)
+      if (p.pose) setPoseForPubkey(p.pubkey, p.pose)
     }
     return
   }
@@ -2105,12 +2171,14 @@ function handleNetMessage(fromPubkey, msg) {
     requestNostrProfile(who)
     ensureAvatar(who)
     setRemoteTarget(who, msg.pos)
+    if (msg.pose) setPoseForPubkey(who, msg.pose)
     return
   }
 
   if (msg.type === "pos") {
     const who = msg.pubkey ?? fromPubkey
     ensureAvatar(who)
+    if (msg.pose) setPoseForPubkey(who, msg.pose)
     if (msg.tile && typeof msg.tile.x === "number" && typeof msg.tile.z === "number") {
       if (msg.pos && typeof msg.pos.x === "number" && typeof msg.pos.z === "number") {
         remoteTargets[who] = { pos: { x: msg.pos.x, z: msg.pos.z }, tile: msg.tile }
@@ -2174,16 +2242,24 @@ function handlePeerState(peer, state) {
       const players = Object.keys(avatars).map((pubkey) => {
         const av = avatars[pubkey]
         const p = snapToTileCenter({ x: av.position.x, z: av.position.z })
-        return { pubkey, name: getDisplayName(pubkey), pos: p, tile: toTileCoord(p) }
+        return { pubkey, name: getDisplayName(pubkey), pos: p, tile: toTileCoord(p), pose: av?.userData?.pose || "stand" }
       })
       net.sendTo(peer, { type: "snapshot", players })
 
-      const items = Array.from(placedItems.values()).map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile, rot: it.rot || 0 }))
+      const items = Array.from(placedItems.values()).map((it) => ({
+        instanceId: it.instanceId,
+        defId: it.defId,
+        tile: it.tile,
+        rot: it.rot || 0,
+        stackIndex: it.stackIndex || 0
+      }))
       if (items.length) {
         net.sendTo(peer, { type: "room_items", items })
       }
     } else {
-      net.sendTo(currentRoom.ownerPubkey, { type: "hello", name: myDisplayName, pos: snappedMyPos, tile: toTileCoord(snappedMyPos) })
+      const hello = { type: "hello", name: myDisplayName, pos: snappedMyPos, tile: toTileCoord(snappedMyPos) }
+      if (shouldIncludePoseInNet()) hello.pose = myPose
+      net.sendTo(currentRoom.ownerPubkey, hello)
     }
   } else if (state === "failed" || state === "disconnected" || state === "closed") {
     appendChatLine(`connection ${state}: ${peer.slice(0, 8)}...`)
@@ -2276,6 +2352,7 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
   updateFurniAccessUi()
 
   myAvatar = ensureAvatar(myPubkey)
+  setAvatarPose(myAvatar, myPose)
   const startPos = snapToTileCenter(getSpawnPos())
   updateAvatarPosition(myAvatar, startPos)
   myTarget = { x: startPos.x, z: startPos.z }
@@ -2801,6 +2878,11 @@ async function init() {
     if (!isPlacing) {
       const id = pickPlacedInstanceFromEvent(e)
       if (id) {
+        if (!e.shiftKey && !(e.ctrlKey || e.metaKey)) {
+          if (trySitOnInstance(id)) {
+            return
+          }
+        }
         if (e.shiftKey) {
           sendRotateItem(id)
           return
@@ -2838,6 +2920,7 @@ async function init() {
           return
         }
       }
+      standUpIfSitting()
       const w = floor.userData.tileToWorld(tile.x, tile.z)
       const target = { x: w.x, z: w.z }
       if (!isTileWalkable(target)) return
@@ -2848,6 +2931,7 @@ async function init() {
     const p = hits[0].point
     const target = snapToTileCenter({ x: p.x, z: p.z })
     if (!isTileWalkable(target)) return
+    standUpIfSitting()
     myTarget = target
   })
 
@@ -2907,6 +2991,7 @@ function animate() {
     const dist = Math.sqrt(dx * dx + dz * dz)
 
     if (dist > 0.02) {
+      standUpIfSitting()
       wasMoving = true
       const step = Math.min(dist, speed * dt)
       myAvatar.position.x += (dx / dist) * step
@@ -2923,9 +3008,12 @@ function animate() {
         const tile = toTileCoord(myTarget)
         if (currentRoom.isHost) {
           const out = { type: "pos", pos, tile, pubkey: myPubkey }
+          if (shouldIncludePoseInNet()) out.pose = myPose
           net.broadcast(out)
         } else {
-          net.broadcast({ type: "pos", pos, tile })
+          const out = { type: "pos", pos, tile }
+          if (shouldIncludePoseInNet()) out.pose = myPose
+          net.broadcast(out)
         }
       }
     } else if (wasMoving) {
@@ -2935,9 +3023,12 @@ function animate() {
         const tile = toTileCoord(myTarget)
         if (currentRoom.isHost) {
           const out = { type: "pos", pos, tile, pubkey: myPubkey }
+          if (shouldIncludePoseInNet()) out.pose = myPose
           net.broadcast(out)
         } else {
-          net.broadcast({ type: "pos", pos, tile })
+          const out = { type: "pos", pos, tile }
+          if (shouldIncludePoseInNet()) out.pose = myPose
+          net.broadcast(out)
         }
       }
     }

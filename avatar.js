@@ -15,12 +15,22 @@ export function createAvatar(scene, pubkey) {
   const material = new THREE.MeshBasicMaterial({ color })
   const avatar = new THREE.Mesh(geometry, material)
 
+  avatar.userData.pose = "stand"
   avatar.position.y = 1
   scene.add(avatar)
 
   return avatar
 }
 
+export function setAvatarPose(avatar, pose) {
+  if (!avatar) return
+  const p = pose === "sit" ? "sit" : "stand"
+  avatar.userData.pose = p
+  avatar.position.y = p === "sit" ? 0.6 : 1
+}
+
 export function updateAvatarPosition(avatar, pos) {
-  avatar.position.set(pos.x, 1, pos.z)
+  const p = avatar?.userData?.pose === "sit" ? "sit" : "stand"
+  const y = p === "sit" ? 0.6 : 1
+  avatar.position.set(pos.x, y, pos.z)
 }
