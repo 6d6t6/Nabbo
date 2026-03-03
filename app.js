@@ -3405,43 +3405,42 @@ function animate() {
     const dz = myTarget.z - myAvatar.position.z
     const dist = Math.sqrt(dx * dx + dz * dz)
 
-    if (dist > 0.02) {
+    const arrived = dist <= 0.02
+    if (!arrived) {
       if (myPose === "sit") {
         standUpIfSitting()
       }
       const yaw = quantizeYawTo8(Math.atan2(dx, dz))
       myAvatar.rotation.y = yaw
-      faceToward(myAvatar, { x: myAvatar.position.x, z: myAvatar.position.z }, myTarget)
       wasMoving = true
       const step = Math.min(dist, speed * dt)
       myAvatar.position.x += (dx / dist) * step
       myAvatar.position.z += (dz / dist) * step
 
-      if (dist < 0.08) {
-        updateAvatarPosition(myAvatar, myTarget)
-      }
-
       const now = performance.now()
       if (net && now - lastSentPosAt > 100) {
-        if (myAvatar && myTarget) {
-          const pos = { x: myAvatar.position.x, z: myAvatar.position.z }
-          const tile = toTileCoord(myTarget)
-          const dir = getDir8FromYaw(myAvatar.rotation.y)
-          if (currentRoom.isHost) {
-            const out = { type: "pos", pos, tile, dir, pubkey: myPubkey }
-            out.pose = myPose
-            if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
-            net.broadcast(out)
-          } else {
-            const out = { type: "pos", pos, tile, dir }
-            out.pose = myPose
-            if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
-            net.broadcast(out)
-          }
+        lastSentPosAt = now
+        const pos = { x: myAvatar.position.x, z: myAvatar.position.z }
+        const tile = toTileCoord(myTarget)
+        const dir = getDir8FromYaw(myAvatar.rotation.y)
+        if (currentRoom.isHost) {
+          const out = { type: "pos", pos, tile, dir, pubkey: myPubkey }
+          out.pose = myPose
+          if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
+          net.broadcast(out)
+        } else {
+          const out = { type: "pos", pos, tile, dir }
+          out.pose = myPose
+          if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
+          net.broadcast(out)
         }
       }
-    } else if (wasMoving) {
-      wasMoving = false
+    } else {
+      if (wasMoving) {
+        wasMoving = false
+      }
+      updateAvatarPosition(myAvatar, myTarget)
+
       if (myPath && Array.isArray(myPath) && myPath.length) {
         myPath.shift()
         if (myPath.length) {
@@ -3451,10 +3450,13 @@ function animate() {
           myPath = null
         }
       }
-      if (myTarget) {
-        const pos = { x: myTarget.x, z: myTarget.z }
+
+      const now = performance.now()
+      if (net && now - lastSentPosAt > 120) {
+        lastSentPosAt = now
+        const pos = { x: myAvatar.position.x, z: myAvatar.position.z }
         const tile = toTileCoord(myTarget)
-        const dir = myAvatar ? getDir8FromYaw(myAvatar.rotation.y) : 0
+        const dir = getDir8FromYaw(myAvatar.rotation.y)
         if (currentRoom.isHost) {
           const out = { type: "pos", pos, tile, dir, pubkey: myPubkey }
           out.pose = myPose
@@ -3517,7 +3519,7 @@ function animate() {
       const fdx = fp.x - nx
       const fdz = fp.z - nz
       const fdist = Math.sqrt(fdx * fdx + fdz * fdz)
-      if (fdist < 0.06) {
+      if (fdist <= 0.02) {
         updateAvatarPosition(av, fp)
         continue
       }
