@@ -94,7 +94,7 @@ export function setAvatarPose(avatar, pose) {
   if (!avatar) return
   const p = pose === "sit" ? "sit" : "stand"
   avatar.userData.pose = p
-  avatar.userData.poseYOffset = p === "sit" ? 0.6 : 1
+  avatar.userData.poseYOffset = p === "sit" ? -0.35 : 0
 }
 
 export function setAvatarAppearance(avatar, appearance) {
@@ -125,6 +125,6 @@ export function setAvatarAppearance(avatar, appearance) {
 
 export function updateAvatarPosition(avatar, pos) {
   if (!avatar || !pos) return
-  const y = typeof avatar?.userData?.poseYOffset === "number" ? avatar.userData.poseYOffset : 1
+  const y = typeof avatar?.userData?.poseYOffset === "number" ? avatar.userData.poseYOffset : 0
   avatar.position.set(pos.x, y, pos.z)
 }

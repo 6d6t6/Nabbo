@@ -876,6 +876,8 @@ let sittingOnInstanceId = ""
 
 let pendingSit = null
 
+let myAppearance = null
+
 let roomAnnounceInterval = null
 
 const PUBLIC_ROOM_TTL_MS = 60_000
@@ -2046,9 +2048,13 @@ function stopRoomAnnouncements() {
   }
 }
 
+const appearances = {}
+
 function ensureAvatar(pubkey) {
   if (!avatars[pubkey]) {
     avatars[pubkey] = createAvatar(scene, pubkey)
+    const app = appearances[pubkey]
+    if (app) setAvatarAppearance(avatars[pubkey], app)
   }
   return avatars[pubkey]
 }
@@ -2416,7 +2422,18 @@ async function startRoom({ roomId, code, name, plan, door, ownerPubkey, isHost, 
 
           const players = Object.keys(avatars).map((pubkey) => {
             const av = avatars[pubkey]
-            return { pubkey, pos: { x: av.position.x, z: av.position.z } }
+            const pos = snapToTileCenter({ x: av.position.x, z: av.position.z })
+            const p = {
+              pubkey,
+              name: getDisplayName(pubkey),
+              pos,
+              tile: toTileCoord(pos),
+              pose: av?.userData?.pose || "stand"
+            }
+            if (p.pose === "sit" && av?.userData?.sittingOnInstanceId) p.sittingOn = av.userData.sittingOnInstanceId
+            const app = appearances[pubkey]
+            if (app) p.appearance = app
+            return p
           })
           net.sendTo(peer, { type: "snapshot", players })
           return
