@@ -884,7 +884,7 @@ function updatePlacedLocal({ instanceId, tile, rot, stackIndex, y }) {
       next.y = y
     } else {
       const movedDefId = existing.defId
-      next.y = computePlacementY(tile, movedDefId)
+      next.y = computePlacementY(tile, movedDefId, { excludeInstanceId: instanceId })
     }
 
     if (floor?.userData?.tileToWorld && existing.mesh) {
@@ -1022,7 +1022,7 @@ function sendMoveItem(instanceId, tile) {
   }
 
   const stackIndex = def?.stackable ? (occupiedByOther ? getStackIndexForTileExcluding(tile, instanceId) : 0) : 0
-  const y = computePlacementY(tile, it?.defId)
+  const y = computePlacementY(tile, it?.defId, { excludeInstanceId: instanceId })
   if (currentRoom?.isHost) {
     updatePlacedLocal({ instanceId, tile, stackIndex })
     net.broadcast({ type: "item_moved", item: { instanceId, tile, stackIndex, y } })
@@ -1592,7 +1592,7 @@ function getStackBaseY(tile, stackIndex) {
   return y
 }
 
-function computePlacementY(tile, defId) {
+function computePlacementY(tile, defId, { excludeInstanceId = "" } = {}) {
   const def = getFurniDef(defId)
   const baseY = getTileBaseY(tile)
   if (!def?.stackable) return baseY
@@ -1600,6 +1600,7 @@ function computePlacementY(tile, defId) {
   let y = baseY
   for (const it of placedItems.values()) {
     if (!it?.tile) continue
+    if (excludeInstanceId && String(it.instanceId || "") === String(excludeInstanceId)) continue
     if (it.tile.x !== tile.x || it.tile.z !== tile.z) continue
     const itY = typeof it.y === "number" && Number.isFinite(it.y) ? it.y : it.mesh?.position?.y
     if (typeof itY !== "number" || !Number.isFinite(itY)) continue
