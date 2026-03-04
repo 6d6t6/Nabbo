@@ -88,123 +88,6 @@ function makeFaceTexture(faceId) {
   return tex
 }
 
-const skinTextureCache = new Map()
-
-function hexToCss(hex) {
-  const c = new THREE.Color(hex)
-  const r = Math.round(c.r * 255)
-  const g = Math.round(c.g * 255)
-  const b = Math.round(c.b * 255)
-  return `rgb(${r}, ${g}, ${b})`
-}
-
-function drawFaceFeatures(ctx, faceKey) {
-  // draw into an 8x8 area at current origin
-  ctx.fillStyle = "#111"
-
-  // eyes
-  ctx.fillRect(1, 2, 2, 2)
-  ctx.fillRect(5, 2, 2, 2)
-
-  // mouth
-  ctx.strokeStyle = "#111"
-  ctx.lineWidth = 1
-  ctx.lineCap = "round"
-  if (faceKey === "neutral") {
-    ctx.beginPath()
-    ctx.moveTo(2, 6)
-    ctx.lineTo(6, 6)
-    ctx.stroke()
-  } else if (faceKey === "sad") {
-    ctx.beginPath()
-    ctx.moveTo(2, 6)
-    ctx.quadraticCurveTo(4, 5, 6, 6)
-    ctx.stroke()
-  } else if (faceKey === "surprised") {
-    ctx.beginPath()
-    ctx.rect(3, 5, 2, 2)
-    ctx.stroke()
-  } else {
-    // smile
-    ctx.beginPath()
-    ctx.moveTo(2, 5)
-    ctx.quadraticCurveTo(4, 7, 6, 5)
-    ctx.stroke()
-  }
-}
-
-function makeSkinTexture(appearance) {
-  const app = normalizeAppearance(appearance)
-  const key = JSON.stringify(app)
-  if (skinTextureCache.has(key)) return skinTextureCache.get(key)
-
-  const skin = colorForAppearanceKey(app.skin)
-  const hair = colorForAppearanceKey(app.hair === "none" ? "none" : app.hair)
-  const top = colorForAppearanceKey(app.top)
-  const bottom = colorForAppearanceKey(app.bottom)
-
-  const c = document.createElement("canvas")
-  c.width = 64
-  c.height = 64
-  const ctx = c.getContext("2d")
-  ctx.imageSmoothingEnabled = false
-  ctx.clearRect(0, 0, 64, 64)
-
-  const fill = (x, y, w, h, colorHex) => {
-    ctx.fillStyle = hexToCss(colorHex)
-    ctx.fillRect(x, y, w, h)
-  }
-
-  // --- Head (8x8 faces)
-  // layout (classic minecraft):
-  // top  : (8,0)
-  // bottom: (16,0)
-  // left : (0,8)
-  // front: (8,8)
-  // right: (16,8)
-  // back : (24,8)
-  fill(0, 8, 32, 8, skin)
-  fill(8, 0, 8, 8, hair)
-  fill(16, 0, 8, 8, skin)
-  // hair wrap on sides/back/top
-  if (app.hair !== "none") {
-    fill(0, 8, 32, 8, hair)
-  }
-  // face features on front (8,8)
-  ctx.save()
-  ctx.translate(8, 8)
-  // skin base for face
-  fill(0, 0, 8, 8, skin)
-  drawFaceFeatures(ctx, app.face)
-  ctx.restore()
-
-  // --- Body (8x12 faces)
-  // top: (20,16) 8x4; bottom: (28,16) 8x4
-  // left: (16,20) 4x12; front: (20,20) 8x12; right: (28,20) 4x12; back: (32,20) 8x12
-  fill(16, 16, 24, 16, top)
-
-  // --- Right leg (4x12 faces)
-  // top: (4,16) 4x4; bottom: (8,16) 4x4
-  // left: (0,20) 4x12; front: (4,20) 4x12; right: (8,20) 4x12; back: (12,20) 4x12
-  fill(0, 16, 16, 16, bottom)
-
-  // --- Right arm (4x12 faces)
-  // top: (44,16) 4x4; bottom: (48,16) 4x4
-  // left: (40,20) 4x12; front: (44,20) 4x12; right: (48,20) 4x12; back: (52,20) 4x12
-  fill(40, 16, 16, 16, top)
-
-  // small skin-colored hand tip (bottom row of arm front)
-  fill(44, 31, 4, 1, skin)
-  fill(48, 31, 4, 1, skin)
-
-  const tex = new THREE.CanvasTexture(c)
-  tex.magFilter = THREE.NearestFilter
-  tex.minFilter = THREE.NearestFilter
-  tex.needsUpdate = true
-  skinTextureCache.set(key, tex)
-  return tex
-}
-
 export function quantizeYawTo8(yaw) {
   const step = (Math.PI * 2) / 8
   const n = Math.round(yaw / step)
@@ -237,33 +120,38 @@ function colorForAppearanceKey(key) {
   return map[String(key || "")] ?? 0xffffff
 }
 
-function makeUvMaterial(tex, x, y, w, h) {
-  const t = tex.clone()
-  t.needsUpdate = true
-  const mat = new THREE.MeshBasicMaterial({ map: t })
-  // texture space: (0,0) bottom-left in three.js
-  mat.map.repeat.set(w / 64, h / 64)
-  mat.map.offset.set(x / 64, 1 - (y + h) / 64)
-  mat.map.wrapS = THREE.ClampToEdgeWrapping
-  mat.map.wrapT = THREE.ClampToEdgeWrapping
-  return mat
+function clamp01(n) {
+  return Math.max(0, Math.min(1, n))
 }
 
-function createSkinnedBox(w, h, d, tex, uvs) {
-  const geo = new THREE.BoxGeometry(w, h, d)
-  // material order for BoxGeometry: +x, -x, +y, -y, +z, -z
-  const mats = [
-    makeUvMaterial(tex, ...uvs.px),
-    makeUvMaterial(tex, ...uvs.nx),
-    makeUvMaterial(tex, ...uvs.py),
-    makeUvMaterial(tex, ...uvs.ny),
-    makeUvMaterial(tex, ...uvs.pz),
-    makeUvMaterial(tex, ...uvs.nz)
+function adjustHex(hex, mul) {
+  const c = new THREE.Color(hex)
+  c.r = clamp01(c.r * mul)
+  c.g = clamp01(c.g * mul)
+  c.b = clamp01(c.b * mul)
+  return c.getHex()
+}
+
+function shadedMaterials(color) {
+  const top = adjustHex(color, 1.08)
+  const front = adjustHex(color, 1.02)
+  const sideA = adjustHex(color, 0.90)
+  const sideB = adjustHex(color, 0.86)
+  const bottom = adjustHex(color, 0.82)
+
+  return [
+    new THREE.MeshBasicMaterial({ color: sideB }),
+    new THREE.MeshBasicMaterial({ color: sideA }),
+    new THREE.MeshBasicMaterial({ color: top }),
+    new THREE.MeshBasicMaterial({ color: bottom }),
+    new THREE.MeshBasicMaterial({ color: front }),
+    new THREE.MeshBasicMaterial({ color: sideA })
   ]
-  const mesh = new THREE.Mesh(geo, mats)
-  mesh.userData = mesh.userData || {}
-  mesh.userData.uvs = uvs
-  return mesh
+}
+
+function createPart(geo, color) {
+  const mat = shadedMaterials(color)
+  return new THREE.Mesh(geo, mat)
 }
 
 export function createAvatar(scene, pubkey) {
@@ -274,74 +162,58 @@ export function createAvatar(scene, pubkey) {
   const baseColor = pubkey ? colorFromString(pubkey) : Math.random() * 0xffffff
   group.userData.baseColor = baseColor
 
-  const initialApp = normalizeAppearance(null)
-  const tex = makeSkinTexture(initialApp)
+  const head = createPart(new THREE.BoxGeometry(0.66, 0.66, 0.62), 0xf2c6a0)
+  head.position.y = 1.68
 
-  // Minecraft-ish proportions (scaled to your world)
-  const head = createSkinnedBox(0.64, 0.64, 0.64, tex, {
-    px: [16, 8, 8, 8],
-    nx: [0, 8, 8, 8],
-    py: [8, 0, 8, 8],
-    ny: [16, 0, 8, 8],
-    pz: [8, 8, 8, 8],
-    nz: [24, 8, 8, 8]
-  })
-  head.position.y = 1.70
+  const faceMat = new THREE.MeshBasicMaterial({ map: makeFaceTexture("smile"), transparent: true })
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.32), faceMat)
+  face.position.set(0, 1.68, 0.32)
 
-  const torso = createSkinnedBox(0.64, 0.78, 0.32, tex, {
-    px: [28, 20, 4, 12],
-    nx: [16, 20, 4, 12],
-    py: [20, 16, 8, 4],
-    ny: [28, 16, 8, 4],
-    pz: [20, 20, 8, 12],
-    nz: [32, 20, 8, 12]
-  })
-  torso.position.y = 1.05
+  const hair = createPart(new THREE.BoxGeometry(0.70, 0.28, 0.66), 0x5a3a24)
+  hair.position.y = 1.96
 
-  const armL = createSkinnedBox(0.24, 0.74, 0.24, tex, {
-    px: [48, 20, 4, 12],
-    nx: [40, 20, 4, 12],
-    py: [44, 16, 4, 4],
-    ny: [48, 16, 4, 4],
-    pz: [44, 20, 4, 12],
-    nz: [52, 20, 4, 12]
-  })
-  armL.position.set(-0.46, 1.05, 0)
+  const torso = createPart(new THREE.BoxGeometry(0.74, 0.62, 0.46), baseColor)
+  torso.position.y = 1.09
 
-  const armR = createSkinnedBox(0.24, 0.74, 0.24, tex, {
-    px: [48, 20, 4, 12],
-    nx: [40, 20, 4, 12],
-    py: [44, 16, 4, 4],
-    ny: [48, 16, 4, 4],
-    pz: [44, 20, 4, 12],
-    nz: [52, 20, 4, 12]
-  })
-  armR.position.set(0.46, 1.05, 0)
+  const armL = createPart(new THREE.BoxGeometry(0.18, 0.52, 0.20), baseColor)
+  armL.position.set(-0.46, 1.12, 0)
 
-  const legL = createSkinnedBox(0.24, 0.78, 0.24, tex, {
-    px: [8, 20, 4, 12],
-    nx: [0, 20, 4, 12],
-    py: [4, 16, 4, 4],
-    ny: [8, 16, 4, 4],
-    pz: [4, 20, 4, 12],
-    nz: [12, 20, 4, 12]
-  })
-  legL.position.set(-0.16, 0.39, 0)
+  const armR = createPart(new THREE.BoxGeometry(0.18, 0.52, 0.20), baseColor)
+  armR.position.set(0.46, 1.12, 0)
 
-  const legR = createSkinnedBox(0.24, 0.78, 0.24, tex, {
-    px: [8, 20, 4, 12],
-    nx: [0, 20, 4, 12],
-    py: [4, 16, 4, 4],
-    ny: [8, 16, 4, 4],
-    pz: [4, 20, 4, 12],
-    nz: [12, 20, 4, 12]
-  })
-  legR.position.set(0.16, 0.39, 0)
+  const handL = createPart(new THREE.BoxGeometry(0.18, 0.18, 0.20), 0xf2c6a0)
+  handL.position.set(-0.46, 0.80, 0)
+
+  const handR = createPart(new THREE.BoxGeometry(0.18, 0.18, 0.20), 0xf2c6a0)
+  handR.position.set(0.46, 0.80, 0)
+
+  const hips = createPart(new THREE.BoxGeometry(0.68, 0.24, 0.46), 0x6e6e7a)
+  hips.position.y = 0.64
+
+  const legL = createPart(new THREE.BoxGeometry(0.26, 0.56, 0.40), 0x6e6e7a)
+  legL.position.set(-0.16, 0.24, 0)
+
+  const legR = createPart(new THREE.BoxGeometry(0.26, 0.56, 0.40), 0x6e6e7a)
+  legR.position.set(0.16, 0.24, 0)
+
+  const footL = createPart(new THREE.BoxGeometry(0.30, 0.14, 0.32), 0x1b1b1b)
+  footL.position.set(0, -0.35, 0.12)
+
+  const footR = createPart(new THREE.BoxGeometry(0.30, 0.14, 0.32), 0x1b1b1b)
+  footR.position.set(0, -0.35, 0.12)
+
+  legL.add(footL)
+  legR.add(footR)
 
   group.add(head)
+  group.add(face)
+  group.add(hair)
   group.add(torso)
   group.add(armL)
   group.add(armR)
+  group.add(handL)
+  group.add(handR)
+  group.add(hips)
   group.add(legL)
   group.add(legR)
 
@@ -351,18 +223,25 @@ export function createAvatar(scene, pubkey) {
     o.userData.pubkey = String(pubkey || "")
   })
 
-  group.userData.parts = { head, torso, armL, armR, legL, legR }
+  group.userData.parts = { head, face, hair, torso, armL, armR, handL, handR, hips, legL, legR, footL, footR }
   group.userData.pose = "stand"
   group.userData.poseYOffset = 0
-  group.userData.appearance = initialApp
+  group.userData.appearance = normalizeAppearance(null)
 
   group.userData.restPose = {
     head: { pos: head.position.clone(), rot: head.rotation.clone() },
+    face: { pos: face.position.clone(), rot: face.rotation.clone() },
+    hair: { pos: hair.position.clone(), rot: hair.rotation.clone() },
     torso: { pos: torso.position.clone(), rot: torso.rotation.clone() },
     armL: { pos: armL.position.clone(), rot: armL.rotation.clone() },
     armR: { pos: armR.position.clone(), rot: armR.rotation.clone() },
+    handL: { pos: handL.position.clone(), rot: handL.rotation.clone() },
+    handR: { pos: handR.position.clone(), rot: handR.rotation.clone() },
+    hips: { pos: hips.position.clone(), rot: hips.rotation.clone() },
     legL: { pos: legL.position.clone(), rot: legL.rotation.clone() },
-    legR: { pos: legR.position.clone(), rot: legR.rotation.clone() }
+    legR: { pos: legR.position.clone(), rot: legR.rotation.clone() },
+    footL: { pos: footL.position.clone(), rot: footL.rotation.clone() },
+    footR: { pos: footR.position.clone(), rot: footR.rotation.clone() }
   }
 
   group.position.y = 0
@@ -384,7 +263,7 @@ export function setAvatarPose(avatar, pose) {
   if (!parts || !rest) return
 
   const reset = () => {
-    for (const k of ["head", "torso", "armL", "armR", "legL", "legR"]) {
+    for (const k of ["head", "face", "hair", "torso", "armL", "armR", "handL", "handR", "hips", "legs", "footL", "footR"]) {
       const part = parts[k]
       const r = rest[k]
       if (!part || !r) continue
@@ -396,27 +275,39 @@ export function setAvatarPose(avatar, pose) {
   reset()
 
   if (p === "sit") {
-    if (parts.torso) {
-      parts.torso.position.y = 1.00
-      parts.torso.position.z = -0.02
+    parts.torso.position.y = 1.02
+    parts.hips.position.y = 0.70
+
+    if (parts.legL) {
+      parts.legL.rotation.x = -Math.PI / 2
+      parts.legL.position.y = 0.50
+      parts.legL.position.z = 0.34
     }
-    for (const leg of [parts.legL, parts.legR]) {
-      if (!leg) continue
-      leg.rotation.x = -Math.PI / 2
-      leg.position.y = 0.56
-      leg.position.z = 0.34
+    if (parts.legR) {
+      parts.legR.rotation.x = -Math.PI / 2
+      parts.legR.position.y = 0.50
+      parts.legR.position.z = 0.34
     }
+
     if (parts.armL) {
-      parts.armL.rotation.x = 0.12
-      parts.armL.rotation.z = 0.10
+      parts.armL.rotation.x = 0.10
+      parts.armL.rotation.z = 0.12
       parts.armL.position.y = 1.02
-      parts.armL.position.z = 0.02
+      parts.armL.position.z = 0.06
     }
     if (parts.armR) {
-      parts.armR.rotation.x = 0.12
-      parts.armR.rotation.z = -0.10
+      parts.armR.rotation.x = 0.10
+      parts.armR.rotation.z = -0.12
       parts.armR.position.y = 1.02
-      parts.armR.position.z = 0.02
+      parts.armR.position.z = 0.06
+    }
+    if (parts.handL) {
+      parts.handL.position.y = 0.74
+      parts.handL.position.z = 0.08
+    }
+    if (parts.handR) {
+      parts.handR.position.y = 0.74
+      parts.handR.position.z = 0.08
     }
   }
 }
@@ -429,20 +320,40 @@ export function setAvatarAppearance(avatar, appearance) {
   const parts = avatar.userData?.parts
   if (!parts) return
 
-  const tex = makeSkinTexture(app)
-  for (const k of ["head", "torso", "armL", "armR", "legL", "legR"]) {
-    const part = parts[k]
-    const uvs = part?.userData?.uvs
-    if (!part || !uvs) continue
-    part.material = [
-      makeUvMaterial(tex, ...uvs.px),
-      makeUvMaterial(tex, ...uvs.nx),
-      makeUvMaterial(tex, ...uvs.py),
-      makeUvMaterial(tex, ...uvs.ny),
-      makeUvMaterial(tex, ...uvs.pz),
-      makeUvMaterial(tex, ...uvs.nz)
-    ]
+  const skinColor = colorForAppearanceKey(app.skin)
+  if (parts.head?.material) {
+    const mats = shadedMaterials(skinColor)
+    parts.head.material = mats
   }
+  if (parts.handL?.material) parts.handL.material = shadedMaterials(skinColor)
+  if (parts.handR?.material) parts.handR.material = shadedMaterials(skinColor)
+
+  if (parts.face?.material) {
+    const t = makeFaceTexture(app.face)
+    parts.face.material.map = t
+    parts.face.material.needsUpdate = true
+  }
+
+  const hairKey = app.hair === "none" ? "none" : app.hair
+  const hairColor = colorForAppearanceKey(hairKey)
+  if (parts.hair?.material) {
+    parts.hair.visible = hairKey !== "none"
+    parts.hair.material = shadedMaterials(hairColor)
+  }
+
+  const topColor = colorForAppearanceKey(app.top)
+  if (parts.torso?.material) parts.torso.material = shadedMaterials(topColor)
+  if (parts.armL?.material) parts.armL.material = shadedMaterials(topColor)
+  if (parts.armR?.material) parts.armR.material = shadedMaterials(topColor)
+
+  const bottomColor = colorForAppearanceKey(app.bottom)
+  if (parts.hips?.material) parts.hips.material = shadedMaterials(bottomColor)
+  if (parts.legL?.material) parts.legL.material = shadedMaterials(bottomColor)
+  if (parts.legR?.material) parts.legR.material = shadedMaterials(bottomColor)
+
+  const shoeColor = adjustHex(bottomColor, 0.45)
+  if (parts.footL?.material) parts.footL.material = shadedMaterials(shoeColor)
+  if (parts.footR?.material) parts.footR.material = shadedMaterials(shoeColor)
 }
 
 export function updateAvatarPosition(avatar, pos) {
