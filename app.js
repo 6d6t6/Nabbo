@@ -612,16 +612,33 @@ function removePlacedLocal(instanceId) {
   }
 }
 
-function updatePlacedLocal({ instanceId, tile, rot }) {
+function updatePlacedLocal({ instanceId, tile, rot, stackIndex }) {
   const existing = placedItems.get(instanceId)
   if (!existing) return
   const next = { ...existing }
   if (tile && typeof tile.x === "number" && typeof tile.z === "number") {
     next.tile = { x: tile.x, z: tile.z }
+
+    const def = getFurniDef(existing.defId)
+    const occupiedByOther = Array.from(placedItems.values()).some((it) => it?.instanceId !== instanceId && it?.tile?.x === tile.x && it?.tile?.z === tile.z)
+    const canStack = Boolean(def?.stackable)
+
+    const nextStackIndex = (() => {
+      if (typeof stackIndex === "number" && Number.isFinite(stackIndex)) return Math.max(0, Math.floor(stackIndex))
+      if (!canStack) return 0
+      if (!occupiedByOther) return 0
+      return getStackIndexForTileExcluding(tile, instanceId)
+    })()
+
+    next.stackIndex = nextStackIndex
+
     if (floor?.userData?.tileToWorld && existing.mesh) {
       const w = floor.userData.tileToWorld(tile.x, tile.z)
       existing.mesh.position.x = w.x
       existing.mesh.position.z = w.z
+
+      const step = Number(def?.stackHeightStep || (def?.height ? def.height * 0.6 : 0.4)) || 0.4
+      existing.mesh.position.y = nextStackIndex * step
     }
   }
   if (typeof rot === "number" && Number.isFinite(rot)) {
@@ -634,6 +651,7 @@ function updatePlacedLocal({ instanceId, tile, rot }) {
     const payload = { state: "placed", roomId: currentRoom.roomId }
     if (tile) payload.tile = tile
     if (typeof rot === "number") payload.rot = rot
+    if (tile) payload.stackIndex = next.stackIndex
     queueItemLocationPublish(instanceId, payload)
   }
   if (currentRoom?.isHost && !loadingRoomState) {
@@ -725,9 +743,18 @@ function sendMoveItem(instanceId, tile) {
   if (!instanceId || !net) return
   if (!currentRoom?.isHost) return
   if (!tile || typeof tile.x !== "number" || typeof tile.z !== "number") return
+
+  const it = placedItems.get(instanceId)
+  const def = getFurniDef(it?.defId)
+  const occupiedByOther = Array.from(placedItems.values()).some((x) => x?.instanceId !== instanceId && x?.tile?.x === tile.x && x?.tile?.z === tile.z)
+  if (occupiedByOther && !def?.stackable) {
+    return
+  }
+
+  const stackIndex = def?.stackable ? (occupiedByOther ? getStackIndexForTileExcluding(tile, instanceId) : 0) : 0
   if (currentRoom?.isHost) {
-    updatePlacedLocal({ instanceId, tile })
-    net.broadcast({ type: "item_moved", item: { instanceId, tile } })
+    updatePlacedLocal({ instanceId, tile, stackIndex })
+    net.broadcast({ type: "item_moved", item: { instanceId, tile, stackIndex } })
   } else {
     net.broadcast({ type: "move_item", item: { instanceId, tile } })
   }
@@ -989,6 +1016,11 @@ let suppressDisconnectUntil = 0
 let chatBubbleLayer = null
 let chatBubbles = []
 
+const zoomNotches = [0.65, 0.75, 0.85, 1.0, 1.15, 1.3, 1.5]
+let zoomNotchIndex = 3
+let zoomWheelAccum = 0
+let pinchState = null
+
 let myDisplayName = ""
 const playerNames = {}
 const nostrProfileRequested = new Set()
@@ -1130,6 +1162,19 @@ function getStackIndexForTile(tile) {
   let max = -1
   for (const it of placedItems.values()) {
     if (!it?.tile) continue
+    if (it.tile.x !== tile.x || it.tile.z !== tile.z) continue
+    const si = Number(it.stackIndex || 0) || 0
+    if (si > max) max = si
+  }
+  return max + 1
+}
+
+function getStackIndexForTileExcluding(tile, instanceId) {
+  if (!tile) return 0
+  let max = -1
+  for (const it of placedItems.values()) {
+    if (!it?.tile) continue
+    if (it.instanceId === instanceId) continue
     if (it.tile.x !== tile.x || it.tile.z !== tile.z) continue
     const si = Number(it.stackIndex || 0) || 0
     if (si > max) max = si
@@ -2619,7 +2664,7 @@ function handleNetMessage(fromPubkey, msg) {
   if (msg.type === "item_moved" && msg.item) {
     const it = msg.item
     if (it?.instanceId && it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number") {
-      updatePlacedLocal({ instanceId: it.instanceId, tile: it.tile })
+      updatePlacedLocal({ instanceId: it.instanceId, tile: it.tile, stackIndex: it.stackIndex })
     }
     return
   }
@@ -2901,6 +2946,8 @@ async function init() {
   camera.rotation.y = Math.PI / 4
   camera.rotation.x = -Math.atan(1 / Math.sqrt(2))
   camera.position.set(28, 28, 28)
+  camera.zoom = zoomNotches[zoomNotchIndex]
+  camera.updateProjectionMatrix()
 
   renderer = new THREE.WebGLRenderer({
     canvas: document.getElementById("scene")
@@ -2919,6 +2966,120 @@ async function init() {
     camera.updateProjectionMatrix()
     renderer.setSize(window.innerWidth, window.innerHeight)
   })
+
+  const applyZoomNotch = (idx) => {
+    const next = Math.max(0, Math.min(zoomNotches.length - 1, idx))
+    zoomNotchIndex = next
+    if (camera) {
+      camera.zoom = zoomNotches[zoomNotchIndex]
+      camera.updateProjectionMatrix()
+    }
+  }
+
+  const zoomIn = () => applyZoomNotch(zoomNotchIndex + 1)
+  const zoomOut = () => applyZoomNotch(zoomNotchIndex - 1)
+  const zoomReset = () => applyZoomNotch(3)
+
+  // Ctrl/Cmd +/- should zoom the room, not the browser page
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      const hasCtrl = Boolean(e.ctrlKey || e.metaKey)
+      if (!hasCtrl) return
+      const k = e.key
+      if (k === "+" || k === "=" ) {
+        e.preventDefault()
+        zoomIn()
+        return
+      }
+      if (k === "-" || k === "_" ) {
+        e.preventDefault()
+        zoomOut()
+        return
+      }
+      if (k === "0") {
+        e.preventDefault()
+        zoomReset()
+      }
+    },
+    { passive: false }
+  )
+
+  // Trackpad pinch usually comes through as wheel events with ctrlKey=true
+  window.addEventListener(
+    "wheel",
+    (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      // prevent browser zoom
+      e.preventDefault()
+      const dy = Number(e.deltaY)
+      if (!Number.isFinite(dy)) return
+
+      zoomWheelAccum += dy
+      const step = 120
+      while (zoomWheelAccum <= -step) {
+        zoomWheelAccum += step
+        zoomIn()
+      }
+      while (zoomWheelAccum >= step) {
+        zoomWheelAccum -= step
+        zoomOut()
+      }
+    },
+    { passive: false }
+  )
+
+  // Mobile touch pinch support (discrete notches)
+  const getTouchDist = (t1, t2) => {
+    const dx = (t1?.clientX ?? 0) - (t2?.clientX ?? 0)
+    const dy = (t1?.clientY ?? 0) - (t2?.clientY ?? 0)
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+
+  window.addEventListener(
+    "touchstart",
+    (e) => {
+      if (!e.touches || e.touches.length !== 2) return
+      pinchState = {
+        startDist: getTouchDist(e.touches[0], e.touches[1]),
+        accum: 0
+      }
+    },
+    { passive: true }
+  )
+
+  window.addEventListener(
+    "touchmove",
+    (e) => {
+      if (!pinchState) return
+      if (!e.touches || e.touches.length !== 2) return
+      e.preventDefault()
+      const d = getTouchDist(e.touches[0], e.touches[1])
+      const delta = d - pinchState.startDist
+      pinchState.startDist = d
+      pinchState.accum += delta
+      const pxStep = 28
+      while (pinchState.accum >= pxStep) {
+        pinchState.accum -= pxStep
+        zoomIn()
+      }
+      while (pinchState.accum <= -pxStep) {
+        pinchState.accum += pxStep
+        zoomOut()
+      }
+    },
+    { passive: false }
+  )
+
+  window.addEventListener(
+    "touchend",
+    (e) => {
+      if (!pinchState) return
+      if (e.touches && e.touches.length === 2) return
+      pinchState = null
+    },
+    { passive: true }
+  )
 
   // ---------- NOSTR SETUP ----------
   await initNostr()
@@ -3382,7 +3543,14 @@ async function init() {
       const hits = raycaster.intersectObject(floor.userData.tiles, true)
       const tile = hits?.[0]?.object?.userData?.tile
       if (tile && typeof tile.x === "number" && typeof tile.z === "number") {
-        updatePlacedLocal({ instanceId: movingInstanceId, tile: { x: tile.x, z: tile.z } })
+        const id = movingInstanceId
+        const it = placedItems.get(id)
+        const def = getFurniDef(it?.defId)
+        const occupiedByOther = Array.from(placedItems.values()).some((x) => x?.instanceId !== id && x?.tile?.x === tile.x && x?.tile?.z === tile.z)
+        if (!occupiedByOther || def?.stackable) {
+          const si = def?.stackable ? (occupiedByOther ? getStackIndexForTileExcluding(tile, id) : 0) : 0
+          updatePlacedLocal({ instanceId: id, tile: { x: tile.x, z: tile.z }, stackIndex: si })
+        }
       }
       e.preventDefault()
       return
