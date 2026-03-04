@@ -72,8 +72,9 @@ function setDetailsRow(label, value, parentEl = null) {
   parent.appendChild(row)
 }
 
-function appendDetailsHero({ thumbEl, name, description }) {
-  if (!detailsBodyEl) return
+function appendDetailsHero({ thumbEl, name, description, parentEl = null }) {
+  const parent = parentEl || detailsBodyEl
+  if (!parent) return
   const hero = document.createElement("div")
   hero.className = "details-hero"
 
@@ -100,11 +101,12 @@ function appendDetailsHero({ thumbEl, name, description }) {
   }
 
   hero.appendChild(meta)
-  detailsBodyEl.appendChild(hero)
+  parent.appendChild(hero)
 }
 
-function appendTechnicalSection(rows) {
-  if (!detailsBodyEl) return null
+function appendTechnicalSection(rows, parentEl = null) {
+  const parent = parentEl || detailsBodyEl
+  if (!parent) return null
   const entries = Array.isArray(rows) ? rows.filter(Boolean) : []
   if (!entries.length) return null
 
@@ -122,7 +124,7 @@ function appendTechnicalSection(rows) {
     setDetailsRow(label, value, body)
   }
   detailsEl.appendChild(body)
-  detailsBodyEl.appendChild(detailsEl)
+  parent.appendChild(detailsEl)
   return detailsEl
 }
 
@@ -133,6 +135,10 @@ function openDetailsPanel(selection) {
   if (!detailsPanelEl || !detailsBodyEl || !detailsTitleEl) return
   detailsBodyEl.innerHTML = ""
 
+  const card = document.createElement("div")
+  card.className = "details-card"
+  detailsBodyEl.appendChild(card)
+
   const kind = String(selection.kind || "")
   if (kind === "avatar" || kind === "bot") {
     const pubkey = String(selection.pubkey || "")
@@ -141,10 +147,11 @@ function openDetailsPanel(selection) {
     appendDetailsHero({
       thumbEl: null,
       name: title,
-      description: kind === "bot" ? "Bot" : "Avatar"
+      description: kind === "bot" ? "Bot" : "Avatar",
+      parentEl: card
     })
-    setDetailsRow("Type", kind === "bot" ? "Bot" : "Avatar")
-    appendTechnicalSection([["Id", pubkey ? pubkey.slice(0, 12) + "…" : ""]])
+    setDetailsRow("Type", kind === "bot" ? "Bot" : "Avatar", card)
+    appendTechnicalSection([["Id", pubkey ? pubkey.slice(0, 12) + "…" : ""]], card)
     detailsPanelEl.style.display = "block"
     return
   }
@@ -159,16 +166,20 @@ function openDetailsPanel(selection) {
     appendDetailsHero({
       thumbEl: defId ? makeThumbEl(defId) : null,
       name: title,
-      description: def?.description ? String(def.description) : ""
+      description: def?.description ? String(def.description) : "",
+      parentEl: card
     })
-    setDetailsRow("Type", "Furni")
+    setDetailsRow("Type", "Furni", card)
     if (it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number") {
-      setDetailsRow("Tile", `${it.tile.x}, ${it.tile.z}`)
+      setDetailsRow("Tile", `${it.tile.x}, ${it.tile.z}`, card)
     }
-    appendTechnicalSection([
+    appendTechnicalSection(
+      [
       defId ? ["Def", String(defId)] : null,
       instanceId ? ["Instance", String(instanceId).slice(0, 12) + "…"] : null
-    ])
+      ],
+      card
+    )
 
     const actions = document.createElement("div")
     actions.className = "details-actions"
