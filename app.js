@@ -3722,6 +3722,8 @@ async function init() {
       const fid = pickPlacedInstanceFromEvent(e)
       if (fid) {
         openDetailsPanel({ kind: "furni", instanceId: fid })
+      } else {
+        closeDetailsPanel()
       }
     }
 
