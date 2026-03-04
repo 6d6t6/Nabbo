@@ -882,7 +882,8 @@ function updatePlacedLocal({ instanceId, tile, rot, stackIndex }) {
       existing.mesh.position.z = w.z
 
       const step = Number(def?.stackHeightStep || (def?.height ? def.height * 0.6 : 0.4)) || 0.4
-      existing.mesh.position.y = nextStackIndex * step
+      const baseY = getTileBaseY(tile)
+      existing.mesh.position.y = baseY + nextStackIndex * step
     }
   }
   if (typeof rot === "number" && Number.isFinite(rot)) {
@@ -1046,6 +1047,26 @@ function createFurniMesh(defId) {
 
   const makeMat = (c) => new THREE.MeshBasicMaterial({ color: c })
 
+  const blockColor = (() => {
+    if (defId === "block_white") return 0xf1f5f9
+    if (defId === "block_black") return 0x111827
+    if (defId === "block_red") return 0xef4444
+    if (defId === "block_green") return 0x22c55e
+    if (defId === "block_blue") return 0x3b82f6
+    if (defId === "block_yellow") return 0xf59e0b
+    if (defId === "block_purple") return 0xa855f7
+    return null
+  })()
+
+  if (blockColor != null) {
+    const geom = new THREE.BoxGeometry(1.0, 1.0, 1.0)
+    const mat = makeMat(blockColor)
+    const mesh = new THREE.Mesh(geom, mat)
+    mesh.position.y = 0.5
+    group.add(mesh)
+    return group
+  }
+
   if (defId === "chair_basic") {
     const seat = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.14, 0.82), makeMat(baseColor))
     seat.position.y = 0.32
@@ -1138,7 +1159,8 @@ function placeItemLocal(item) {
   const stackIndex = Number(item.stackIndex || 0) || 0
   const def = getFurniDef(item.defId)
   const step = Number(def.stackHeightStep || (def.height ? def.height * 0.6 : 0.4)) || 0.4
-  mesh.position.y += stackIndex * step
+  const baseY = getTileBaseY(item.tile)
+  mesh.position.y = baseY + stackIndex * step
 
   mesh.traverse((o) => {
     if (o && typeof o === "object") {
@@ -1401,6 +1423,13 @@ let pendingLocTimer = null
 
 let blockedTileSet = new Set()
 
+let floorBaseYByKey = new Map()
+let walkSurfaceYByKey = new Map()
+
+const BLOCK_UNIT = 1
+const MAX_STEP_UP = 1.05
+const MAX_STEP_DOWN = 1.5
+
 const furniDefs = {
   chair_basic: {
     displayName: "Chair",
@@ -1433,71 +1462,71 @@ const furniDefs = {
   block_white: {
     displayName: "White Block",
     description: "A cheap walkable block.",
-    height: 0.32,
+    height: 1,
     footprint: { w: 1, d: 1 },
     blocksMovement: false,
     stackable: true,
-    stackHeightStep: 0.32,
+    stackHeightStep: 1,
     actions: []
   },
   block_black: {
     displayName: "Black Block",
     description: "A cheap walkable block.",
-    height: 0.32,
+    height: 1,
     footprint: { w: 1, d: 1 },
     blocksMovement: false,
     stackable: true,
-    stackHeightStep: 0.32,
+    stackHeightStep: 1,
     actions: []
   },
   block_red: {
     displayName: "Red Block",
     description: "A cheap walkable block.",
-    height: 0.32,
+    height: 1,
     footprint: { w: 1, d: 1 },
     blocksMovement: false,
     stackable: true,
-    stackHeightStep: 0.32,
+    stackHeightStep: 1,
     actions: []
   },
   block_green: {
     displayName: "Green Block",
     description: "A cheap walkable block.",
-    height: 0.32,
+    height: 1,
     footprint: { w: 1, d: 1 },
     blocksMovement: false,
     stackable: true,
-    stackHeightStep: 0.32,
+    stackHeightStep: 1,
     actions: []
   },
   block_blue: {
     displayName: "Blue Block",
     description: "A cheap walkable block.",
-    height: 0.32,
+    height: 1,
     footprint: { w: 1, d: 1 },
     blocksMovement: false,
     stackable: true,
-    stackHeightStep: 0.32,
+    stackHeightStep: 1,
     actions: []
   },
   block_yellow: {
     displayName: "Yellow Block",
     description: "A cheap walkable block.",
-    height: 0.32,
+    height: 1,
     footprint: { w: 1, d: 1 },
     blocksMovement: false,
     stackable: true,
-    stackHeightStep: 0.32,
+    stackHeightStep: 1,
     actions: []
   },
   block_purple: {
     displayName: "Purple Block",
     description: "A cheap walkable block.",
-    height: 0.32,
+    height: 1,
     footprint: { w: 1, d: 1 },
     blocksMovement: false,
     stackable: true,
-    stackHeightStep: 0.32,
+    stackHeightStep: 1,
     actions: []
   }
 }
@@ -1529,6 +1558,51 @@ function rebuildBlockedTiles() {
     next.add(tileKey(it.tile.x, it.tile.z))
   }
   blockedTileSet = next
+
+  const base = new Map()
+  const tiles = floor?.userData?.tiles?.children
+  if (tiles && Array.isArray(tiles)) {
+    for (const t of tiles) {
+      const tt = t?.userData?.tile
+      if (!tt) continue
+      if (typeof tt.x !== "number" || typeof tt.z !== "number") continue
+      const y = typeof t.position?.y === "number" ? t.position.y : 0
+      base.set(tileKey(tt.x, tt.z), y)
+    }
+  }
+  floorBaseYByKey = base
+
+  const surface = new Map()
+  for (const [k, y] of base.entries()) surface.set(k, y)
+  for (const it of placedItems.values()) {
+    if (!it?.tile) continue
+    const def = getFurniDef(it.defId)
+    if (def?.blocksMovement !== false) continue
+    const k = tileKey(it.tile.x, it.tile.z)
+    const by = base.get(k) ?? 0
+    const step = Number(def?.stackHeightStep || def?.height || BLOCK_UNIT) || BLOCK_UNIT
+    const h = Number(def?.height || step) || step
+    const si = Number(it.stackIndex || 0) || 0
+    const top = by + si * step + h
+    const prev = surface.get(k) ?? by
+    if (top > prev) surface.set(k, top)
+  }
+  walkSurfaceYByKey = surface
+}
+
+function getTileBaseY(tile) {
+  if (!tile) return 0
+  const k = tileKey(tile.x, tile.z)
+  if (floorBaseYByKey.has(k)) return floorBaseYByKey.get(k)
+  return 0
+}
+
+function getWalkSurfaceY(tile) {
+  if (!tile) return 0
+  const k = tileKey(tile.x, tile.z)
+  if (walkSurfaceYByKey.has(k)) return walkSurfaceYByKey.get(k)
+  if (floorBaseYByKey.has(k)) return floorBaseYByKey.get(k)
+  return 0
 }
 
 function getStackIndexForTile(tile) {
@@ -2171,6 +2245,15 @@ function isTileCoordWalkable(tile, { allowBlocked = false } = {}) {
   return !blockedTileSet.has(k)
 }
 
+function canStepBetweenTiles(fromTile, toTile) {
+  const y0 = getWalkSurfaceY(fromTile)
+  const y1 = getWalkSurfaceY(toTile)
+  const dy = y1 - y0
+  if (dy > MAX_STEP_UP) return false
+  if (-dy > MAX_STEP_DOWN) return false
+  return true
+}
+
 function findPathAStar(startTile, goalTile, { allowGoalBlocked = false, allowStartBlocked = false } = {}) {
   if (!startTile || !goalTile) return null
   const startKey = tileKey(startTile.x, startTile.z)
@@ -2211,6 +2294,7 @@ function findPathAStar(startTile, goalTile, { allowGoalBlocked = false, allowSta
         }
         const allowBlocked = allowGoalBlocked && tileKey(nt.x, nt.z) === goalKey
         if (!isTileCoordWalkable(nt, { allowBlocked })) continue
+        if (!canStepBetweenTiles(t, nt)) continue
         out.push(nt)
       }
     }
@@ -3186,6 +3270,7 @@ async function startRoom({ roomId, code, name, plan, door, entryDir, ownerPubkey
     const ed2 = currentRoom?.entryDir
     floor = createRoom(scene, { plan: effectivePlan, door: door || null, entryDir: ed2 == null ? 2 : ed2 })
     currentFloorPlan = effectivePlan
+    rebuildBlockedTiles()
   }
 
   if (isHost && roomId) {
@@ -4212,6 +4297,9 @@ function animate() {
       myAvatar.position.x += (dx / dist) * step
       myAvatar.position.z += (dz / dist) * step
 
+      const curTile = toTileCoord({ x: myAvatar.position.x, z: myAvatar.position.z })
+      myAvatar.position.y = getWalkSurfaceY(curTile) + (myAvatar.userData?.poseYOffset || 0)
+
       const now = performance.now()
       if (net && now - lastSentPosAt > 100) {
         lastSentPosAt = now
@@ -4234,7 +4322,8 @@ function animate() {
       if (wasMoving) {
         wasMoving = false
       }
-      updateAvatarPosition(myAvatar, myTarget)
+      const t = toTileCoord(myTarget)
+      updateAvatarPosition(myAvatar, { x: myTarget.x, z: myTarget.z, y: getWalkSurfaceY(t) })
 
       if (myPath && Array.isArray(myPath) && myPath.length) {
         myPath.shift()
@@ -4315,12 +4404,13 @@ function animate() {
       const fdz = fp.z - nz
       const fdist = Math.sqrt(fdx * fdx + fdz * fdz)
       if (fdist <= 0.02) {
-        updateAvatarPosition(av, fp)
+        updateAvatarPosition(av, { x: fp.x, z: fp.z, y: getWalkSurfaceY(finalTile) })
         continue
       }
     }
 
-    updateAvatarPosition(av, { x: nx, z: nz })
+    const rt = toTileCoord({ x: nx, z: nz })
+    updateAvatarPosition(av, { x: nx, z: nz, y: getWalkSurfaceY(rt) })
   }
 
   renderer.render(scene, camera)

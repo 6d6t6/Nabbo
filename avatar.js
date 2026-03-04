@@ -236,6 +236,7 @@ export function setAvatarAppearance(avatar, appearance) {
 
 export function updateAvatarPosition(avatar, pos) {
   if (!avatar || !pos) return
-  const y = typeof avatar?.userData?.poseYOffset === "number" ? avatar.userData.poseYOffset : 0
+  const baseY = typeof avatar?.userData?.poseYOffset === "number" ? avatar.userData.poseYOffset : 0
+  const y = typeof pos.y === "number" && Number.isFinite(pos.y) ? pos.y + baseY : baseY
   avatar.position.set(pos.x, y, pos.z)
 }
