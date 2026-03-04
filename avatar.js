@@ -162,18 +162,18 @@ export function createAvatar(scene, pubkey) {
   const baseColor = pubkey ? colorFromString(pubkey) : Math.random() * 0xffffff
   group.userData.baseColor = baseColor
 
-  const head = createPart(new THREE.BoxGeometry(0.66, 0.66, 0.62), 0xf2c6a0)
-  head.position.y = 1.68
+  const head = createPart(new THREE.BoxGeometry(0.62, 0.62, 0.60), 0xf2c6a0)
+  head.position.y = 1.74
 
   const faceMat = new THREE.MeshBasicMaterial({ map: makeFaceTexture("smile"), transparent: true })
-  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.32), faceMat)
-  face.position.set(0, 1.68, 0.32)
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.40, 0.30), faceMat)
+  face.position.set(0, 1.74, 0.31)
 
-  const hair = createPart(new THREE.BoxGeometry(0.70, 0.28, 0.66), 0x5a3a24)
-  hair.position.y = 1.96
+  const hair = createPart(new THREE.BoxGeometry(0.66, 0.26, 0.64), 0x5a3a24)
+  hair.position.y = 2.00
 
-  const torso = createPart(new THREE.BoxGeometry(0.74, 0.62, 0.46), baseColor)
-  torso.position.y = 1.09
+  const torso = createPart(new THREE.BoxGeometry(0.74, 0.60, 0.46), baseColor)
+  torso.position.y = 1.10
 
   const armL = createPart(new THREE.BoxGeometry(0.18, 0.52, 0.20), baseColor)
   armL.position.set(-0.46, 1.12, 0)
@@ -187,20 +187,20 @@ export function createAvatar(scene, pubkey) {
   const handR = createPart(new THREE.BoxGeometry(0.18, 0.18, 0.20), 0xf2c6a0)
   handR.position.set(0.46, 0.80, 0)
 
-  const hips = createPart(new THREE.BoxGeometry(0.68, 0.24, 0.46), 0x6e6e7a)
-  hips.position.y = 0.64
+  const hips = createPart(new THREE.BoxGeometry(0.68, 0.22, 0.46), 0x6e6e7a)
+  hips.position.y = 0.68
 
-  const legL = createPart(new THREE.BoxGeometry(0.26, 0.56, 0.40), 0x6e6e7a)
-  legL.position.set(-0.16, 0.24, 0)
+  const legL = createPart(new THREE.BoxGeometry(0.26, 0.46, 0.40), 0x6e6e7a)
+  legL.position.set(-0.16, 0.33, 0)
 
-  const legR = createPart(new THREE.BoxGeometry(0.26, 0.56, 0.40), 0x6e6e7a)
-  legR.position.set(0.16, 0.24, 0)
+  const legR = createPart(new THREE.BoxGeometry(0.26, 0.46, 0.40), 0x6e6e7a)
+  legR.position.set(0.16, 0.33, 0)
 
   const footL = createPart(new THREE.BoxGeometry(0.30, 0.14, 0.32), 0x1b1b1b)
-  footL.position.set(0, -0.35, 0.12)
+  footL.position.set(0, -0.26, 0.12)
 
   const footR = createPart(new THREE.BoxGeometry(0.30, 0.14, 0.32), 0x1b1b1b)
-  footR.position.set(0, -0.35, 0.12)
+  footR.position.set(0, -0.26, 0.12)
 
   legL.add(footL)
   legR.add(footR)

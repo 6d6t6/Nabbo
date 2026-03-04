@@ -4378,7 +4378,6 @@ function animate() {
 
     if (myPose === "sit" && sittingOnInstanceId) {
       applySitTransform(myAvatar, sittingOnInstanceId)
-      myTarget = { x: myAvatar.position.x, z: myAvatar.position.z }
     }
 
     const dx = myTarget.x - myAvatar.position.x
