@@ -2978,10 +2978,16 @@ function setMyPose(pose, { sittingOn = "" } = {}) {
 }
 
 function standUpIfSitting() {
-  if (myPose !== "sit") return
+  const avatarPose = myAvatar?.userData?.pose
+  const isSitting = myPose === "sit" || avatarPose === "sit" || Boolean(sittingOnInstanceId)
+  if (!isSitting) return
   setMyPose("stand")
+  sittingOnInstanceId = ""
   pendingSit = null
-  if (myAvatar) updateAvatarPosition(myAvatar, { x: myAvatar.position.x, z: myAvatar.position.z })
+  if (myAvatar) {
+    setAvatarPose(myAvatar, "stand")
+    updateAvatarPosition(myAvatar, { x: myAvatar.position.x, z: myAvatar.position.z })
+  }
 }
 
 function getPlacedAtTile(tile) {
