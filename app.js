@@ -1617,6 +1617,10 @@ function rebuildBlockedTiles() {
       const h = Number(def?.height || step)
       const height = Number.isFinite(h) && h > 0 ? h : step
 
+      if (it?.mesh?.position) {
+        it.mesh.position.y = y
+      }
+
       if (def?.blocksMovement === false) {
         const top = y + height
         const prev = surface.get(k) ?? by
