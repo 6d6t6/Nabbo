@@ -346,7 +346,7 @@ function renderCatalog() {
 
     const title = document.createElement("div")
     title.className = "card-title"
-    title.textContent = it.name
+    title.textContent = getFurniDef(it.defId)?.displayName || it.name
     card.appendChild(title)
 
     const sub = document.createElement("div")
@@ -409,7 +409,7 @@ function renderCatalog() {
           }
         }
 
-        appendChatLine(`bought: ${it.name}`)
+        appendChatLine(`bought: ${getFurniDef(it.defId)?.displayName || it.name}`)
         await new Promise((r) => setTimeout(r, 600))
         refreshInventory()
         refreshCoins()
@@ -1213,13 +1213,48 @@ let pendingLocTimer = null
 let blockedTileSet = new Set()
 
 const furniDefs = {
-  chair_basic: { height: 0.9, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: ["sit"] },
-  table_basic: { height: 0.8, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: [] },
-  plant_basic: { height: 1.1, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: true, stackHeightStep: 0.55, actions: [] }
+  chair_basic: {
+    displayName: "Chair",
+    description: "A simple chair.",
+    height: 0.9,
+    footprint: { w: 1, d: 1 },
+    blocksMovement: true,
+    stackable: false,
+    actions: ["sit"]
+  },
+  table_basic: {
+    displayName: "Table",
+    description: "A basic table.",
+    height: 0.8,
+    footprint: { w: 1, d: 1 },
+    blocksMovement: true,
+    stackable: false,
+    actions: []
+  },
+  plant_basic: {
+    displayName: "Plant",
+    description: "A decorative plant.",
+    height: 1.1,
+    footprint: { w: 1, d: 1 },
+    blocksMovement: true,
+    stackable: true,
+    stackHeightStep: 0.55,
+    actions: []
+  }
 }
 
 function getFurniDef(defId) {
-  return furniDefs[String(defId || "")] || { height: 0.7, footprint: { w: 1, d: 1 }, blocksMovement: true, stackable: false, actions: [] }
+  return (
+    furniDefs[String(defId || "")] || {
+      displayName: "Furni",
+      description: "",
+      height: 0.7,
+      footprint: { w: 1, d: 1 },
+      blocksMovement: true,
+      stackable: false,
+      actions: []
+    }
+  )
 }
 
 function tileKey(x, z) {
