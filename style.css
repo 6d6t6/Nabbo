@@ -297,13 +297,13 @@ select {
   position: absolute;
   right: 10px;
   bottom: 118px;
-  width: 260px;
+  width: 192px;
   max-height: 35vh;
   overflow: hidden;
   padding: 10px;
   background: rgba(20, 22, 26, 0.74);
   color: #e6e6e6;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   font-size: 13px;
   display: none;
@@ -343,14 +343,14 @@ select {
   overflow: auto;
   max-height: calc(35vh - 44px);
 }
-
+/*
 .details-card {
   padding: 8px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.03);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
 }
-
+*/
 .details-hero {
   display: grid;
   grid-template-columns: 64px 1fr;
@@ -435,9 +435,12 @@ select {
 }
 
 .details-actions button {
-  width: 100%;
-  padding: 4px 6px;
+  padding: 4px 8px;
   border-radius: 6px;
+  height: 32px;
+  line-height: 1;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .details-row {

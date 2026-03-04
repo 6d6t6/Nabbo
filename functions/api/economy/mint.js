@@ -53,9 +53,16 @@ function randomHex(bytesLen) {
 }
 
 const PRICES = {
-  chair_basic: 10,
-  table_basic: 25,
-  plant_basic: 15
+  chair_basic: 5,
+  table_basic: 10,
+  plant_basic: 7,
+  block_white: 1,
+  block_black: 1,
+  block_red: 1,
+  block_green: 1,
+  block_blue: 1,
+  block_yellow: 1,
+  block_purple: 1
 }
 
 function getPrice(defId) {

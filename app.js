@@ -1356,9 +1356,16 @@ let selectedCreateRoomEntryDir = 2
 let customScrollbarApi = null
 
 const catalog = [
-  { defId: "chair_basic", name: "Chair", price: 10, category: "Seating" },
-  { defId: "table_basic", name: "Table", price: 25, category: "Tables" },
-  { defId: "plant_basic", name: "Plant", price: 15, category: "Decor" }
+  { defId: "chair_basic", name: "Chair", price: 5, category: "Seating" },
+  { defId: "table_basic", name: "Table", price: 10, category: "Tables" },
+  { defId: "plant_basic", name: "Plant", price: 7, category: "Decor" },
+  { defId: "block_white", name: "White Block", price: 1, category: "Blocks" },
+  { defId: "block_black", name: "Black Block", price: 1, category: "Blocks" },
+  { defId: "block_red", name: "Red Block", price: 1, category: "Blocks" },
+  { defId: "block_green", name: "Green Block", price: 1, category: "Blocks" },
+  { defId: "block_blue", name: "Blue Block", price: 1, category: "Blocks" },
+  { defId: "block_yellow", name: "Yellow Block", price: 1, category: "Blocks" },
+  { defId: "block_purple", name: "Purple Block", price: 1, category: "Blocks" }
 ]
 
 const inventoryItems = new Map()
@@ -1421,6 +1428,76 @@ const furniDefs = {
     blocksMovement: true,
     stackable: true,
     stackHeightStep: 0.55,
+    actions: []
+  },
+  block_white: {
+    displayName: "White Block",
+    description: "A cheap walkable block.",
+    height: 0.32,
+    footprint: { w: 1, d: 1 },
+    blocksMovement: false,
+    stackable: true,
+    stackHeightStep: 0.32,
+    actions: []
+  },
+  block_black: {
+    displayName: "Black Block",
+    description: "A cheap walkable block.",
+    height: 0.32,
+    footprint: { w: 1, d: 1 },
+    blocksMovement: false,
+    stackable: true,
+    stackHeightStep: 0.32,
+    actions: []
+  },
+  block_red: {
+    displayName: "Red Block",
+    description: "A cheap walkable block.",
+    height: 0.32,
+    footprint: { w: 1, d: 1 },
+    blocksMovement: false,
+    stackable: true,
+    stackHeightStep: 0.32,
+    actions: []
+  },
+  block_green: {
+    displayName: "Green Block",
+    description: "A cheap walkable block.",
+    height: 0.32,
+    footprint: { w: 1, d: 1 },
+    blocksMovement: false,
+    stackable: true,
+    stackHeightStep: 0.32,
+    actions: []
+  },
+  block_blue: {
+    displayName: "Blue Block",
+    description: "A cheap walkable block.",
+    height: 0.32,
+    footprint: { w: 1, d: 1 },
+    blocksMovement: false,
+    stackable: true,
+    stackHeightStep: 0.32,
+    actions: []
+  },
+  block_yellow: {
+    displayName: "Yellow Block",
+    description: "A cheap walkable block.",
+    height: 0.32,
+    footprint: { w: 1, d: 1 },
+    blocksMovement: false,
+    stackable: true,
+    stackHeightStep: 0.32,
+    actions: []
+  },
+  block_purple: {
+    displayName: "Purple Block",
+    description: "A cheap walkable block.",
+    height: 0.32,
+    footprint: { w: 1, d: 1 },
+    blocksMovement: false,
+    stackable: true,
+    stackHeightStep: 0.32,
     actions: []
   }
 }
