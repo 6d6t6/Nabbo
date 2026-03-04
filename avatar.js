@@ -321,18 +321,18 @@ export function setAvatarPose(avatar, pose) {
     if (parts.legs) {
       parts.legs.rotation.x = 0
       parts.legs.position.y = 0.32
-      parts.legs.position.z = 0.22
+      parts.legs.position.z = 0.14
     }
 
     if (parts.legL) {
       parts.legL.rotation.x = -Math.PI / 2
       parts.legL.position.y = 0.10
-      parts.legL.position.z = 0.18
+      parts.legL.position.z = 0.10
     }
     if (parts.legR) {
       parts.legR.rotation.x = -Math.PI / 2
       parts.legR.position.y = 0.10
-      parts.legR.position.z = 0.18
+      parts.legR.position.z = 0.10
     }
 
     if (parts.armL) {
