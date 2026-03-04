@@ -26,8 +26,9 @@ function closeDetailsPanel() {
   } catch {}
 }
 
-function setDetailsRow(label, value) {
-  if (!detailsBodyEl) return
+function setDetailsRow(label, value, parentEl = null) {
+  const parent = parentEl || detailsBodyEl
+  if (!parent) return
   const row = document.createElement("div")
   row.className = "details-row"
   const l = document.createElement("div")
@@ -38,7 +39,61 @@ function setDetailsRow(label, value) {
   v.textContent = value
   row.appendChild(l)
   row.appendChild(v)
-  detailsBodyEl.appendChild(row)
+  parent.appendChild(row)
+}
+
+function appendDetailsHero({ thumbEl, name, description }) {
+  if (!detailsBodyEl) return
+  const hero = document.createElement("div")
+  hero.className = "details-hero"
+
+  if (thumbEl) {
+    const t = document.createElement("div")
+    t.className = "details-hero-thumb"
+    t.appendChild(thumbEl)
+    hero.appendChild(t)
+  }
+
+  const meta = document.createElement("div")
+  meta.className = "details-hero-meta"
+
+  const title = document.createElement("div")
+  title.className = "details-hero-name"
+  title.textContent = name || ""
+  meta.appendChild(title)
+
+  if (description) {
+    const desc = document.createElement("div")
+    desc.className = "details-hero-desc"
+    desc.textContent = description
+    meta.appendChild(desc)
+  }
+
+  hero.appendChild(meta)
+  detailsBodyEl.appendChild(hero)
+}
+
+function appendTechnicalSection(rows) {
+  if (!detailsBodyEl) return null
+  const entries = Array.isArray(rows) ? rows.filter(Boolean) : []
+  if (!entries.length) return null
+
+  const detailsEl = document.createElement("details")
+  detailsEl.className = "details-tech"
+
+  const summary = document.createElement("summary")
+  summary.className = "details-tech-summary"
+  summary.textContent = "Technical"
+  detailsEl.appendChild(summary)
+
+  const body = document.createElement("div")
+  body.className = "details-tech-body"
+  for (const [label, value] of entries) {
+    setDetailsRow(label, value, body)
+  }
+  detailsEl.appendChild(body)
+  detailsBodyEl.appendChild(detailsEl)
+  return detailsEl
 }
 
 function openDetailsPanel(selection) {
@@ -53,9 +108,13 @@ function openDetailsPanel(selection) {
     const pubkey = String(selection.pubkey || "")
     const title = getDisplayName(pubkey) || "Avatar"
     detailsTitleEl.textContent = title
+    appendDetailsHero({
+      thumbEl: null,
+      name: title,
+      description: kind === "bot" ? "Bot" : "Avatar"
+    })
     setDetailsRow("Type", kind === "bot" ? "Bot" : "Avatar")
-    setDetailsRow("Name", title)
-    setDetailsRow("Id", pubkey ? pubkey.slice(0, 12) + "…" : "")
+    appendTechnicalSection([["Id", pubkey ? pubkey.slice(0, 12) + "…" : ""]])
     detailsPanelEl.style.display = "block"
     return
   }
@@ -65,15 +124,21 @@ function openDetailsPanel(selection) {
     const it = placedItems.get(instanceId)
     const defId = it?.defId || selection.defId || ""
     const def = getFurniDef(defId)
-    const title = String(def?.name || selection.name || defId || "Furni")
+    const title = String(def?.displayName || selection.name || defId || "Furni")
     detailsTitleEl.textContent = title
+    appendDetailsHero({
+      thumbEl: defId ? makeThumbEl(defId) : null,
+      name: title,
+      description: def?.description ? String(def.description) : ""
+    })
     setDetailsRow("Type", "Furni")
-    setDetailsRow("Name", title)
-    if (defId) setDetailsRow("Def", String(defId))
-    if (instanceId) setDetailsRow("Instance", String(instanceId).slice(0, 12) + "…")
     if (it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number") {
       setDetailsRow("Tile", `${it.tile.x}, ${it.tile.z}`)
     }
+    appendTechnicalSection([
+      defId ? ["Def", String(defId)] : null,
+      instanceId ? ["Instance", String(instanceId).slice(0, 12) + "…"] : null
+    ])
     detailsPanelEl.style.display = "block"
     return
   }
