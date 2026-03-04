@@ -150,6 +150,12 @@ function openDetailsPanel(selection) {
   if (!selection || typeof selection !== "object") return
   currentDetails = selection
 
+  if (detailsActionsEl) {
+    detailsActionsEl.style.display = "none"
+    detailsActionsEl.innerHTML = ""
+    requestAnimationFrame(() => syncDetailsBottomOffset())
+  }
+
   if (!detailsPanelEl || !detailsBodyEl || !detailsTitleEl) return
   detailsBodyEl.innerHTML = ""
 
@@ -3026,7 +3032,7 @@ function applySitTransform(avatar, instanceId) {
   const chairWorld = fromTileCoord(it.tile)
   avatar.position.x = chairWorld.x
   avatar.position.z = chairWorld.z
-  const baseY = typeof it.mesh.position?.y === "number" ? it.mesh.position.y : 0.5
+  const baseY = typeof it.y === "number" && Number.isFinite(it.y) ? it.y : typeof it.mesh.position?.y === "number" ? it.mesh.position.y : 0.5
   avatar.position.y = baseY + 0.6
   const rot = Number(it.rot || 0) || 0
   avatar.rotation.y = rot * (Math.PI / 2)
