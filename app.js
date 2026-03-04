@@ -4276,6 +4276,11 @@ async function init() {
         }
       }
 
+      if (myPose === "sit" && Boolean(sittingOnInstanceId)) {
+        pendingSit = null
+        standUpIfSitting()
+      }
+
       const chairId = getChairInstanceAtTile(tile)
       if (chairId) {
         const isSameChair = myPose === "sit" && Boolean(sittingOnInstanceId) && String(chairId) === String(sittingOnInstanceId)
