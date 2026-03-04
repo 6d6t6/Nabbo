@@ -363,6 +363,10 @@ function shouldIncludeSittingOnInNet() {
   return myPose === "sit" && Boolean(sittingOnInstanceId)
 }
 
+function shouldIncludeSitYInNet() {
+  return myPose === "sit" && Boolean(sittingOnInstanceId) && Boolean(myAvatar)
+}
+
 function updateFurniAccessUi() {
   const host = Boolean(currentRoom?.isHost)
   if (inventoryPlaceEl) inventoryPlaceEl.disabled = !host
@@ -2949,12 +2953,14 @@ function setPoseForPubkey(pubkey, pose) {
   setAvatarPose(av, pose)
   if (pose !== "sit" && av?.userData) {
     av.userData.sittingOnInstanceId = ""
+    av.userData.remoteSitY = undefined
   }
 }
 
-function setRemoteSitting(pubkey, instanceId) {
+function setRemoteSitting(pubkey, instanceId, sitY) {
   const av = ensureAvatar(pubkey)
   av.userData.sittingOnInstanceId = String(instanceId || "")
+  av.userData.remoteSitY = typeof sitY === "number" && Number.isFinite(sitY) ? sitY : av.userData.remoteSitY
   setAvatarPose(av, "sit")
   if (av.userData.sittingOnInstanceId) applySitTransform(av, av.userData.sittingOnInstanceId)
 }
@@ -3032,8 +3038,12 @@ function applySitTransform(avatar, instanceId) {
   const chairWorld = fromTileCoord(it.tile)
   avatar.position.x = chairWorld.x
   avatar.position.z = chairWorld.z
-  const baseY = typeof it.y === "number" && Number.isFinite(it.y) ? it.y : typeof it.mesh.position?.y === "number" ? it.mesh.position.y : 0.5
-  avatar.position.y = baseY + 0.6
+  if (typeof avatar.userData?.remoteSitY === "number" && Number.isFinite(avatar.userData.remoteSitY)) {
+    avatar.position.y = avatar.userData.remoteSitY
+  } else {
+    const baseY = typeof it.y === "number" && Number.isFinite(it.y) ? it.y : typeof it.mesh.position?.y === "number" ? it.mesh.position.y : 0.5
+    avatar.position.y = baseY + 0.6
+  }
   const rot = Number(it.rot || 0) || 0
   avatar.rotation.y = rot * (Math.PI / 2)
 }
@@ -3112,7 +3122,7 @@ function handleNetMessage(fromPubkey, msg) {
       if (typeof p.dir === "number") av.rotation.y = yawFromDir8(p.dir)
       remoteTargets[p.pubkey] = { pos: { x: p.pos.x, z: p.pos.z }, tile: p.tile || toTileCoord(p.pos), dir: typeof p.dir === "number" ? p.dir : undefined }
       if (p.pose === "sit" && p.sittingOn) {
-        setRemoteSitting(p.pubkey, p.sittingOn)
+        setRemoteSitting(p.pubkey, p.sittingOn, p.sitY)
       } else if (p.pose) {
         setPoseForPubkey(p.pubkey, p.pose)
       }
@@ -3147,7 +3157,7 @@ function handleNetMessage(fromPubkey, msg) {
     if (typeof msg.dir === "number") av.rotation.y = yawFromDir8(msg.dir)
     remoteTargets[who] = { pos: { x: msg.pos.x, z: msg.pos.z }, tile: msg.tile || toTileCoord(msg.pos), dir: typeof msg.dir === "number" ? msg.dir : undefined }
     if (msg.pose === "sit" && msg.sittingOn) {
-      setRemoteSitting(who, msg.sittingOn)
+      setRemoteSitting(who, msg.sittingOn, msg.sitY)
     } else if (msg.pose) {
       setPoseForPubkey(who, msg.pose)
     }
@@ -3158,7 +3168,7 @@ function handleNetMessage(fromPubkey, msg) {
     const who = msg.pubkey ?? fromPubkey
     const av = ensureAvatar(who)
     if (msg.pose === "sit" && msg.sittingOn) {
-      setRemoteSitting(who, msg.sittingOn)
+      setRemoteSitting(who, msg.sittingOn, msg.sitY)
     } else if (msg.pose) {
       setPoseForPubkey(who, msg.pose)
     }
@@ -3254,7 +3264,10 @@ function handlePeerState(peer, state) {
           pose: av?.userData?.pose || "stand",
           dir: getDir8FromYaw(av?.rotation?.y || 0)
         }
-        if (out.pose === "sit" && av?.userData?.sittingOnInstanceId) out.sittingOn = av.userData.sittingOnInstanceId
+        if (out.pose === "sit" && av?.userData?.sittingOnInstanceId) {
+          out.sittingOn = av.userData.sittingOnInstanceId
+          out.sitY = typeof av.position?.y === "number" && Number.isFinite(av.position.y) ? av.position.y : undefined
+        }
         return out
       })
       net.sendTo(peer, { type: "snapshot", players })
@@ -3280,6 +3293,7 @@ function handlePeerState(peer, state) {
       }
       hello.pose = myPose
       if (shouldIncludeSittingOnInNet()) hello.sittingOn = sittingOnInstanceId
+      if (shouldIncludeSitYInNet()) hello.sitY = myAvatar.position.y
       net.sendTo(currentRoom.ownerPubkey, hello)
     }
   } else if (state === "failed" || state === "disconnected" || state === "closed") {
@@ -3416,7 +3430,10 @@ async function startRoom({ roomId, code, name, plan, door, entryDir, ownerPubkey
               pose: av?.userData?.pose || "stand",
               dir: getDir8FromYaw(av?.rotation?.y || 0)
             }
-            if (p.pose === "sit" && av?.userData?.sittingOnInstanceId) p.sittingOn = av.userData.sittingOnInstanceId
+            if (p.pose === "sit" && av?.userData?.sittingOnInstanceId) {
+              p.sittingOn = av.userData.sittingOnInstanceId
+              p.sitY = typeof av.position?.y === "number" && Number.isFinite(av.position.y) ? av.position.y : undefined
+            }
             const app = appearances[pubkey]
             if (app) p.appearance = app
             return p
@@ -4393,11 +4410,13 @@ function animate() {
           const out = { type: "pos", pos, tile, dir, pubkey: myPubkey }
           out.pose = myPose
           if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
+          if (shouldIncludeSitYInNet()) out.sitY = myAvatar.position.y
           net.broadcast(out)
         } else {
           const out = { type: "pos", pos, tile, dir }
           out.pose = myPose
           if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
+          if (shouldIncludeSitYInNet()) out.sitY = myAvatar.position.y
           net.broadcast(out)
         }
       }
@@ -4428,11 +4447,13 @@ function animate() {
           const out = { type: "pos", pos, tile, dir, pubkey: myPubkey }
           out.pose = myPose
           if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
+          if (shouldIncludeSitYInNet()) out.sitY = myAvatar.position.y
           net.broadcast(out)
         } else {
           const out = { type: "pos", pos, tile, dir }
           out.pose = myPose
           if (shouldIncludeSittingOnInNet()) out.sittingOn = sittingOnInstanceId
+          if (shouldIncludeSitYInNet()) out.sitY = myAvatar.position.y
           net.broadcast(out)
         }
       }
