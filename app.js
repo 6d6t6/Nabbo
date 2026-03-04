@@ -4276,17 +4276,20 @@ async function init() {
         }
       }
 
-      if (myPose === "sit" && Boolean(sittingOnInstanceId)) {
+      const wasSittingAtClick = myPose === "sit" && Boolean(sittingOnInstanceId)
+      if (wasSittingAtClick) {
         pendingSit = null
         standUpIfSitting()
       }
 
-      const chairId = getChairInstanceAtTile(tile)
-      if (chairId) {
-        const isSameChair = myPose === "sit" && Boolean(sittingOnInstanceId) && String(chairId) === String(sittingOnInstanceId)
-        if (!isSameChair) {
-          if (trySitOnInstance(chairId)) {
-            return
+      if (!wasSittingAtClick) {
+        const chairId = getChairInstanceAtTile(tile)
+        if (chairId) {
+          const isSameChair = myPose === "sit" && Boolean(sittingOnInstanceId) && String(chairId) === String(sittingOnInstanceId)
+          if (!isSameChair) {
+            if (trySitOnInstance(chairId)) {
+              return
+            }
           }
         }
       }
