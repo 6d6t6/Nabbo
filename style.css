@@ -285,6 +285,19 @@ select {
   -webkit-overflow-scrolling: touch;
 }
 
+.details-actions-bar {
+  position: absolute;
+  right: 10px;
+  bottom: 118px;
+  width: 260px;
+  padding: 10px;
+  background: rgba(20, 22, 26, 0.74);
+  color: #e6e6e6;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  z-index: 6;
+}
+
 .details-panel {
   position: absolute;
   right: 10px;
@@ -423,7 +436,7 @@ select {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 0px;
 }
 
 .details-actions button {

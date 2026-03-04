@@ -18,6 +18,9 @@ let avatars = {}
 
 let currentDetails = null
 
+const DETAILS_BASE_BOTTOM_PX = 118
+const DETAILS_ACTIONS_GAP_PX = 10
+
 function furniHasUse(def) {
   if (!def || typeof def !== "object") return false
   if (def.usable === true) return true
@@ -53,7 +56,22 @@ function closeDetailsPanel() {
   try {
     if (detailsPanelEl) detailsPanelEl.style.display = "none"
     if (detailsBodyEl) detailsBodyEl.innerHTML = ""
+    if (detailsActionsEl) {
+      detailsActionsEl.style.display = "none"
+      detailsActionsEl.innerHTML = ""
+    }
+    if (detailsPanelEl) detailsPanelEl.style.bottom = `${DETAILS_BASE_BOTTOM_PX}px`
   } catch {}
+}
+
+function syncDetailsBottomOffset() {
+  if (!detailsPanelEl) return
+  if (!detailsActionsEl || detailsActionsEl.style.display === "none") {
+    detailsPanelEl.style.bottom = `${DETAILS_BASE_BOTTOM_PX}px`
+    return
+  }
+  const h = detailsActionsEl.offsetHeight || 0
+  detailsPanelEl.style.bottom = `${DETAILS_BASE_BOTTOM_PX + DETAILS_ACTIONS_GAP_PX + h}px`
 }
 
 function setDetailsRow(label, value, parentEl = null) {
@@ -220,9 +238,25 @@ function openDetailsPanel(selection) {
       addBtn({ label: "Use", kind: "use", primary: true, onClick: () => sendUseItem(instanceId) })
     }
 
-    if (actions.childNodes.length) detailsBodyEl.appendChild(actions)
+    if (detailsActionsEl) {
+      detailsActionsEl.innerHTML = ""
+      if (actions.childNodes.length) {
+        detailsActionsEl.appendChild(actions)
+        detailsActionsEl.style.display = "block"
+        requestAnimationFrame(() => syncDetailsBottomOffset())
+      } else {
+        detailsActionsEl.style.display = "none"
+        requestAnimationFrame(() => syncDetailsBottomOffset())
+      }
+    }
     detailsPanelEl.style.display = "block"
     return
+  }
+
+  if (detailsActionsEl) {
+    detailsActionsEl.style.display = "none"
+    detailsActionsEl.innerHTML = ""
+    requestAnimationFrame(() => syncDetailsBottomOffset())
   }
 }
 
@@ -1280,6 +1314,7 @@ const detailsPanelEl = document.getElementById("detailsPanel")
 const detailsTitleEl = document.getElementById("detailsTitle")
 const detailsBodyEl = document.getElementById("detailsBody")
 const detailsCloseEl = document.getElementById("detailsClose")
+const detailsActionsEl = document.getElementById("detailsActions")
 
 const dockNavigator = document.getElementById("dockNavigator")
 const dockInventory = document.getElementById("dockInventory")
@@ -3763,6 +3798,7 @@ async function init() {
     if (target.closest(".dock")) return true
     if (target.closest("#ui")) return true
     if (target.closest(".chatlog")) return true
+    if (target.closest(".details-actions-bar")) return true
     return false
   }
 
@@ -3920,6 +3956,7 @@ async function init() {
       if (t.closest("#ui")) return
       if (t.closest(".chatlog")) return
       if (t.closest(".details-panel")) return
+      if (t.closest(".details-actions-bar")) return
     }
 
     if (!isPlacing) {
