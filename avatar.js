@@ -162,42 +162,45 @@ export function createAvatar(scene, pubkey) {
   const baseColor = pubkey ? colorFromString(pubkey) : Math.random() * 0xffffff
   group.userData.baseColor = baseColor
 
-  const head = createPart(new THREE.BoxGeometry(0.60, 0.62, 0.58), 0xf2c6a0)
-  head.position.y = 1.66
+  const head = createPart(new THREE.BoxGeometry(0.66, 0.66, 0.62), 0xf2c6a0)
+  head.position.y = 1.68
 
   const faceMat = new THREE.MeshBasicMaterial({ map: makeFaceTexture("smile"), transparent: true })
-  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.40, 0.30), faceMat)
-  face.position.set(0, 1.66, 0.30)
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.32), faceMat)
+  face.position.set(0, 1.68, 0.32)
 
-  const hair = createPart(new THREE.BoxGeometry(0.64, 0.26, 0.62), 0x5a3a24)
-  hair.position.y = 1.90
+  const hair = createPart(new THREE.BoxGeometry(0.70, 0.28, 0.66), 0x5a3a24)
+  hair.position.y = 1.96
 
-  const torso = createPart(new THREE.BoxGeometry(0.78, 0.70, 0.50), baseColor)
+  const torso = createPart(new THREE.BoxGeometry(0.74, 0.70, 0.46), baseColor)
   torso.position.y = 1.10
 
-  const armL = createPart(new THREE.BoxGeometry(0.18, 0.52, 0.22), baseColor)
-  armL.position.set(-0.50, 1.12, 0)
+  const armL = createPart(new THREE.BoxGeometry(0.18, 0.52, 0.20), baseColor)
+  armL.position.set(-0.46, 1.12, 0)
 
-  const armR = createPart(new THREE.BoxGeometry(0.18, 0.52, 0.22), baseColor)
-  armR.position.set(0.50, 1.12, 0)
+  const armR = createPart(new THREE.BoxGeometry(0.18, 0.52, 0.20), baseColor)
+  armR.position.set(0.46, 1.12, 0)
 
-  const handL = createPart(new THREE.BoxGeometry(0.18, 0.18, 0.22), 0xf2c6a0)
-  handL.position.set(-0.50, 0.80, 0)
+  const handL = createPart(new THREE.BoxGeometry(0.18, 0.18, 0.20), 0xf2c6a0)
+  handL.position.set(-0.46, 0.80, 0)
 
-  const handR = createPart(new THREE.BoxGeometry(0.18, 0.18, 0.22), 0xf2c6a0)
-  handR.position.set(0.50, 0.80, 0)
+  const handR = createPart(new THREE.BoxGeometry(0.18, 0.18, 0.20), 0xf2c6a0)
+  handR.position.set(0.46, 0.80, 0)
 
-  const hips = createPart(new THREE.BoxGeometry(0.74, 0.28, 0.48), 0x6e6e7a)
+  const hips = createPart(new THREE.BoxGeometry(0.70, 0.26, 0.46), 0x6e6e7a)
   hips.position.y = 0.68
 
-  const legs = createPart(new THREE.BoxGeometry(0.70, 0.62, 0.50), 0x6e6e7a)
+  const legs = createPart(new THREE.BoxGeometry(0.66, 0.62, 0.46), 0x6e6e7a)
   legs.position.y = 0.30
 
   const footL = createPart(new THREE.BoxGeometry(0.30, 0.14, 0.32), 0x1b1b1b)
-  footL.position.set(-0.18, 0.02, 0.10)
+  footL.position.set(-0.18, -0.38, 0.12)
 
   const footR = createPart(new THREE.BoxGeometry(0.30, 0.14, 0.32), 0x1b1b1b)
-  footR.position.set(0.18, 0.02, 0.10)
+  footR.position.set(0.18, -0.38, 0.12)
+
+  legs.add(footL)
+  legs.add(footR)
 
   group.add(head)
   group.add(face)
@@ -209,8 +212,6 @@ export function createAvatar(scene, pubkey) {
   group.add(handR)
   group.add(hips)
   group.add(legs)
-  group.add(footL)
-  group.add(footR)
 
   group.traverse((o) => {
     if (!o || typeof o !== "object") return
