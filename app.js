@@ -881,9 +881,8 @@ function updatePlacedLocal({ instanceId, tile, rot, stackIndex }) {
       existing.mesh.position.x = w.x
       existing.mesh.position.z = w.z
 
-      const step = Number(def?.stackHeightStep || (def?.height ? def.height * 0.6 : 0.4)) || 0.4
-      const baseY = getTileBaseY(tile)
-      existing.mesh.position.y = baseY + nextStackIndex * step
+      const baseY = canStack ? getStackBaseY(tile, nextStackIndex) : getTileBaseY(tile)
+      existing.mesh.position.y = baseY
     }
   }
   if (typeof rot === "number" && Number.isFinite(rot)) {
@@ -1158,9 +1157,9 @@ function placeItemLocal(item) {
   mesh.rotation.y = rot * (Math.PI / 2)
   const stackIndex = Number(item.stackIndex || 0) || 0
   const def = getFurniDef(item.defId)
-  const step = Number(def.stackHeightStep || (def.height ? def.height * 0.6 : 0.4)) || 0.4
-  const baseY = getTileBaseY(item.tile)
-  mesh.position.y = baseY + stackIndex * step
+  const step = getItemStackStep(item.defId)
+  const baseY = def?.stackable ? getStackBaseY(item.tile, stackIndex) : getTileBaseY(item.tile)
+  mesh.position.y = baseY
 
   mesh.traverse((o) => {
     if (o && typeof o === "object") {
@@ -1549,6 +1548,27 @@ function tileKey(x, z) {
   return `${x},${z}`
 }
 
+function getItemStackStep(defId) {
+  const def = getFurniDef(defId)
+  const v = Number(def?.stackHeightStep || def?.height)
+  return Number.isFinite(v) && v > 0 ? v : 0.4
+}
+
+function getStackBaseY(tile, stackIndex) {
+  if (!tile) return 0
+  const si = Number(stackIndex || 0) || 0
+  let y = getTileBaseY(tile)
+  const below = Array.from(placedItems.values())
+    .filter((it) => it?.tile?.x === tile.x && it?.tile?.z === tile.z)
+    .map((it) => ({ it, si: Number(it.stackIndex || 0) || 0 }))
+    .filter((x) => x.si < si)
+    .sort((a, b) => a.si - b.si)
+  for (const { it } of below) {
+    y += getItemStackStep(it.defId)
+  }
+  return y
+}
+
 function rebuildBlockedTiles() {
   const next = new Set()
   for (const it of placedItems.values()) {
@@ -1572,21 +1592,41 @@ function rebuildBlockedTiles() {
   }
   floorBaseYByKey = base
 
-  const surface = new Map()
-  for (const [k, y] of base.entries()) surface.set(k, y)
+  const itemsByTile = new Map()
   for (const it of placedItems.values()) {
     if (!it?.tile) continue
-    const def = getFurniDef(it.defId)
-    if (def?.blocksMovement !== false) continue
     const k = tileKey(it.tile.x, it.tile.z)
-    const by = base.get(k) ?? 0
-    const step = Number(def?.stackHeightStep || def?.height || BLOCK_UNIT) || BLOCK_UNIT
-    const h = Number(def?.height || step) || step
-    const si = Number(it.stackIndex || 0) || 0
-    const top = by + si * step + h
-    const prev = surface.get(k) ?? by
-    if (top > prev) surface.set(k, top)
+    const arr = itemsByTile.get(k) || []
+    arr.push(it)
+    itemsByTile.set(k, arr)
   }
+
+  const surface = new Map()
+  for (const [k, y] of base.entries()) surface.set(k, y)
+
+  for (const [k, arr] of itemsByTile.entries()) {
+    const by = base.get(k) ?? 0
+    const sorted = arr
+      .map((it) => ({ it, si: Number(it.stackIndex || 0) || 0 }))
+      .sort((a, b) => a.si - b.si)
+
+    let y = by
+    for (const { it } of sorted) {
+      const def = getFurniDef(it.defId)
+      const step = getItemStackStep(it.defId)
+      const h = Number(def?.height || step)
+      const height = Number.isFinite(h) && h > 0 ? h : step
+
+      if (def?.blocksMovement === false) {
+        const top = y + height
+        const prev = surface.get(k) ?? by
+        if (top > prev) surface.set(k, top)
+      }
+
+      y += step
+    }
+  }
+
   walkSurfaceYByKey = surface
 }
 
@@ -1799,10 +1839,18 @@ function updateGhostFromMouseEvent(e) {
   const def = getFurniDef(defId)
   if (def?.stackable) {
     const stackIndex = getStackIndexForTile(tile)
-    const step = Number(def.stackHeightStep || (def.height ? def.height * 0.6 : 0.4)) || 0.4
-    ghostItem.position.y = stackIndex * step
+    let y = getTileBaseY(tile)
+    const below = Array.from(placedItems.values())
+      .filter((it) => it?.tile?.x === tile.x && it?.tile?.z === tile.z)
+      .map((it) => ({ it, si: Number(it.stackIndex || 0) || 0 }))
+      .filter((x) => x.si < stackIndex)
+      .sort((a, b) => a.si - b.si)
+    for (const { it } of below) {
+      y += getItemStackStep(it.defId)
+    }
+    ghostItem.position.y = y
   } else {
-    ghostItem.position.y = 0
+    ghostItem.position.y = getTileBaseY(tile)
   }
 }
 
