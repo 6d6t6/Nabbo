@@ -18,6 +18,36 @@ let avatars = {}
 
 let currentDetails = null
 
+function furniHasUse(def) {
+  if (!def || typeof def !== "object") return false
+  if (def.usable === true) return true
+  if (Array.isArray(def.actions) && def.actions.includes("use")) return true
+  if (Array.isArray(def.interactions) && def.interactions.length > 0) return true
+  return false
+}
+
+function handleUseItemLocal(instanceId, fromPubkey) {
+  const it = placedItems.get(instanceId)
+  const defId = it?.defId
+  const def = getFurniDef(defId)
+  const name = String(def?.displayName || defId || "Furni")
+  const who = fromPubkey ? getDisplayName(fromPubkey) || fromPubkey.slice(0, 8) + "…" : "someone"
+  appendChatLine(`${who} used ${name}`)
+}
+
+function sendUseItem(instanceId) {
+  if (!instanceId || !net) return
+  const it = placedItems.get(instanceId)
+  const def = getFurniDef(it?.defId)
+  if (!furniHasUse(def)) return
+  if (currentRoom?.isHost) {
+    handleUseItemLocal(instanceId, myPubkey)
+    net.broadcast({ type: "item_used", instanceId, from: myPubkey })
+  } else {
+    net.broadcast({ type: "use_item", instanceId, from: myPubkey })
+  }
+}
+
 function closeDetailsPanel() {
   currentDetails = null
   try {
@@ -139,6 +169,47 @@ function openDetailsPanel(selection) {
       defId ? ["Def", String(defId)] : null,
       instanceId ? ["Instance", String(instanceId).slice(0, 12) + "…"] : null
     ])
+
+    const actions = document.createElement("div")
+    actions.className = "details-actions"
+
+    const canEdit = Boolean(currentRoom?.isHost)
+    const canUse = furniHasUse(def)
+
+    const addBtn = ({ label, kind, primary = false, onClick }) => {
+      const b = document.createElement("button")
+      b.type = "button"
+      b.className = primary ? "primary" : ""
+      b.dataset.kind = kind
+      b.textContent = label
+      b.onclick = (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onClick?.()
+      }
+      actions.appendChild(b)
+    }
+
+    if (canEdit) {
+      addBtn({
+        label: "Move",
+        kind: "move",
+        onClick: () => {
+          if (!instanceId) return
+          movingInstanceId = instanceId
+          movingStartTile = placedItems.get(instanceId)?.tile || null
+          appendChatLine("click a tile to move item")
+        }
+      })
+      addBtn({ label: "Rotate", kind: "rotate", onClick: () => sendRotateItem(instanceId) })
+      addBtn({ label: "Pick up", kind: "pickup", onClick: () => sendPickupItem(instanceId) })
+    }
+
+    if (canUse) {
+      addBtn({ label: "Use", kind: "use", primary: true, onClick: () => sendUseItem(instanceId) })
+    }
+
+    if (actions.childNodes.length) detailsBodyEl.appendChild(actions)
     detailsPanelEl.style.display = "block"
     return
   }
@@ -2861,6 +2932,14 @@ function handleNetMessage(fromPubkey, msg) {
     removePlacedLocal(msg.instanceId)
     return
   }
+
+  if ((msg.type === "use_item" || msg.type === "item_used") && msg.instanceId) {
+    handleUseItemLocal(String(msg.instanceId), String(msg.from || fromPubkey || ""))
+    if (currentDetails?.kind === "furni" && String(currentDetails.instanceId || "") === String(msg.instanceId)) {
+      openDetailsPanel({ kind: "furni", instanceId: String(msg.instanceId) })
+    }
+    return
+  }
 }
 
 function handlePeerState(peer, state) {
@@ -3678,6 +3757,21 @@ async function init() {
 
   const canvasEl = renderer.domElement
 
+  canvasEl.addEventListener("dblclick", (e) => {
+    if (!currentRoom) return
+    if (shouldIgnoreScenePointer(e.target)) return
+    if (document.body.classList.contains("dragging")) return
+
+    const id = pickPlacedInstanceFromEvent(e)
+    if (!id) return
+    const it = placedItems.get(id)
+    const def = getFurniDef(it?.defId)
+    if (!furniHasUse(def)) return
+
+    sendUseItem(id)
+    e.preventDefault()
+  })
+
   canvasEl.addEventListener(
     "pointermove",
     (e) => {
@@ -3787,6 +3881,24 @@ async function init() {
     if (!floor) return
 
     if (Date.now() < suppressClickUntil) return
+
+    if (movingInstanceId && currentRoom?.isHost) {
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1
+      raycaster.setFromCamera(mouse, camera)
+      const tileGroup = floor.userData?.tiles
+      if (!tileGroup) return
+      const hits = raycaster.intersectObject(tileGroup, true)
+      const tile = hits?.[0]?.object?.userData?.tile
+      if (tile && typeof tile.x === "number" && typeof tile.z === "number") {
+        const id = movingInstanceId
+        movingInstanceId = ""
+        sendMoveItem(id, { x: tile.x, z: tile.z })
+        movingStartTile = null
+        e.preventDefault()
+        return
+      }
+    }
 
     if (document.body.classList.contains("dragging")) return
 

@@ -412,6 +412,19 @@ select {
   padding: 0 10px 8px;
 }
 
+.details-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.details-actions button {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
 .details-row {
   margin-bottom: 6px;
 }
