@@ -303,7 +303,7 @@ export function setAvatarPose(avatar, pose) {
   if (!parts || !rest) return
 
   const reset = () => {
-    for (const k of ["head", "face", "hair", "torso", "armL", "armR", "handL", "handR", "hips", "legs", "footL", "footR"]) {
+    for (const k of ["head", "face", "hair", "torso", "armL", "armR", "handL", "handR", "hips", "legs", "legL", "legR", "footL", "footR"]) {
       const part = parts[k]
       const r = rest[k]
       if (!part || !r) continue
