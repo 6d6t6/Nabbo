@@ -4278,8 +4278,11 @@ async function init() {
 
       const chairId = getChairInstanceAtTile(tile)
       if (chairId) {
-        if (trySitOnInstance(chairId)) {
-          return
+        const isSameChair = myPose === "sit" && Boolean(sittingOnInstanceId) && String(chairId) === String(sittingOnInstanceId)
+        if (!isSameChair) {
+          if (trySitOnInstance(chairId)) {
+            return
+          }
         }
       }
 
