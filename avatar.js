@@ -27,57 +27,92 @@ function makeFaceTexture(faceId) {
   if (faceTextureCache.has(key)) return faceTextureCache.get(key)
 
   const c = document.createElement("canvas")
-  c.width = 32
-  c.height = 32
+  c.width = 64
+  c.height = 64
   const ctx = c.getContext("2d")
-  ctx.clearRect(0, 0, 32, 32)
+  ctx.clearRect(0, 0, 64, 64)
 
   const ink = "#111"
+  
+  // Eye whites (larger and more detailed)
+  ctx.fillStyle = "#ffffff"
+  ctx.fillRect(16, 20, 14, 10)
+  ctx.fillRect(34, 20, 14, 10)
+  
+  // Eye highlights
+  ctx.fillStyle = "#f0f8ff"
+  ctx.fillRect(18, 22, 4, 4)
+  ctx.fillRect(36, 22, 4, 4)
+  
+  // Pupils (larger and centered)
   ctx.fillStyle = ink
-
-  // whites of eyes
-  ctx.fillStyle = "#f7f7f7"
-  ctx.fillRect(8, 10, 7, 6)
-  ctx.fillRect(17, 10, 7, 6)
-
-  // pupils
+  ctx.fillRect(22, 24, 4, 4)
+  ctx.fillRect(40, 24, 4, 4)
+  
+  // Eyebrows (more expressive)
   ctx.fillStyle = ink
-  ctx.fillRect(11, 12, 2, 2)
-  ctx.fillRect(20, 12, 2, 2)
-
-  // brows
-  ctx.fillRect(9, 9, 5, 1)
-  ctx.fillRect(18, 9, 5, 1)
-
-  // mouths
+  if (key === "sad") {
+    // Sad eyebrows - angled up
+    ctx.fillRect(18, 16, 8, 2)
+    ctx.fillRect(38, 18, 8, 2)
+  } else if (key === "surprised") {
+    // Surprised eyebrows - raised high
+    ctx.fillRect(18, 14, 8, 2)
+    ctx.fillRect(38, 14, 8, 2)
+  } else {
+    // Normal/neutral eyebrows
+    ctx.fillRect(18, 16, 8, 2)
+    ctx.fillRect(38, 16, 8, 2)
+  }
+  
+  // Nose (small dot)
+  ctx.fillStyle = ink
+  ctx.fillRect(30, 32, 2, 2)
+  
+  // Mouths (more detailed)
   ctx.strokeStyle = ink
-  ctx.lineWidth = 3
+  ctx.lineWidth = 4
   ctx.lineCap = "round"
   if (key === "neutral") {
     ctx.beginPath()
-    ctx.moveTo(11, 21)
-    ctx.lineTo(21, 21)
+    ctx.moveTo(24, 44)
+    ctx.lineTo(40, 44)
     ctx.stroke()
   } else if (key === "sad") {
     ctx.beginPath()
-    ctx.arc(16, 25, 7, Math.PI * 1.15, Math.PI * 1.85)
+    ctx.arc(32, 48, 8, Math.PI * 1.2, Math.PI * 1.8)
     ctx.stroke()
   } else if (key === "surprised") {
+    ctx.fillStyle = ink
+    ctx.fillRect(28, 44, 8, 8)
+  } else if (key === "wink") {
+    // Winking face
+    ctx.fillStyle = ink
+    ctx.fillRect(22, 24, 4, 4) // open eye
+    ctx.fillRect(38, 24, 8, 2) // winking eye
+    ctx.strokeStyle = ink
+    ctx.lineWidth = 4
     ctx.beginPath()
-    ctx.arc(16, 22, 4, 0, Math.PI * 2)
+    ctx.arc(32, 44, 10, 0.1 * Math.PI, 0.9 * Math.PI)
     ctx.stroke()
   } else {
-    // smile
+    // Big smile
     ctx.beginPath()
-    ctx.arc(16, 19, 8, 0.15 * Math.PI, 0.85 * Math.PI)
+    ctx.arc(32, 42, 12, 0.1 * Math.PI, 0.9 * Math.PI)
     ctx.stroke()
   }
-
-  // subtle blush
-  ctx.globalAlpha = 0.25
-  ctx.fillStyle = "#d86a7a"
-  ctx.fillRect(6, 18, 4, 3)
-  ctx.fillRect(22, 18, 4, 3)
+  
+  // Cheeks/Blush (more prominent)
+  ctx.globalAlpha = 0.3
+  ctx.fillStyle = "#ffb6c1"
+  ctx.fillRect(12, 36, 8, 6)
+  ctx.fillRect(44, 36, 8, 6)
+  ctx.globalAlpha = 1
+  
+  // Add subtle shading
+  ctx.globalAlpha = 0.1
+  ctx.fillStyle = ink
+  ctx.fillRect(16, 16, 32, 2) // forehead shadow
   ctx.globalAlpha = 1
 
   const tex = new THREE.CanvasTexture(c)
@@ -162,48 +197,53 @@ export function createAvatar(scene, pubkey) {
   const baseColor = pubkey ? colorFromString(pubkey) : Math.random() * 0xffffff
   group.userData.baseColor = baseColor
 
-  const head = createPart(new THREE.BoxGeometry(0.62, 0.62, 0.60), 0xf2c6a0)
-  head.position.y = 1.74
+  const head = createPart(new THREE.BoxGeometry(0.60, 0.60, 0.56), 0xf2c6a0)
+  head.position.y = 1.68
 
   const faceMat = new THREE.MeshBasicMaterial({ map: makeFaceTexture("smile"), transparent: true })
-  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.40, 0.30), faceMat)
-  face.position.set(0, 1.74, 0.31)
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.48), faceMat)
+  face.position.set(0, 1.68, 0.32)
 
-  const hair = createPart(new THREE.BoxGeometry(0.66, 0.26, 0.64), 0x5a3a24)
-  hair.position.y = 2.00
+  const hair = createPart(new THREE.BoxGeometry(0.70, 0.28, 0.66), 0x5a3a24)
+  hair.position.y = 1.96
 
-  const torso = createPart(new THREE.BoxGeometry(0.74, 0.60, 0.46), baseColor)
-  torso.position.y = 1.10
+  const torso = createPart(new THREE.BoxGeometry(0.74, 0.54, 0.46), baseColor)
+  torso.position.y = 1.03
 
   const armL = createPart(new THREE.BoxGeometry(0.18, 0.52, 0.20), baseColor)
-  armL.position.set(-0.46, 1.12, 0)
+  armL.position.set(-0.46, 1.07, 0)
 
   const armR = createPart(new THREE.BoxGeometry(0.18, 0.52, 0.20), baseColor)
-  armR.position.set(0.46, 1.12, 0)
+  armR.position.set(0.46, 1.07, 0)
 
   const handL = createPart(new THREE.BoxGeometry(0.18, 0.18, 0.20), 0xf2c6a0)
-  handL.position.set(-0.46, 0.80, 0)
+  handL.position.set(-0.46, 0.7, 0)
 
   const handR = createPart(new THREE.BoxGeometry(0.18, 0.18, 0.20), 0xf2c6a0)
-  handR.position.set(0.46, 0.80, 0)
+  handR.position.set(0.46, 0.7, 0)
 
-  const hips = createPart(new THREE.BoxGeometry(0.68, 0.22, 0.46), 0x6e6e7a)
+  const hips = createPart(new THREE.BoxGeometry(0.70, 0.24, 0.46), 0x6e6e7a)
   hips.position.y = 0.68
 
-  const legL = createPart(new THREE.BoxGeometry(0.26, 0.46, 0.40), 0x6e6e7a)
-  legL.position.set(-0.16, 0.33, 0)
+  const legs = new THREE.Group()
+  legs.position.y = 0.32
 
-  const legR = createPart(new THREE.BoxGeometry(0.26, 0.46, 0.40), 0x6e6e7a)
-  legR.position.set(0.16, 0.33, 0)
+  const legL = createPart(new THREE.BoxGeometry(0.26, 0.50, 0.20), 0x6e6e7a)
+  legL.position.set(-0.18, 0.10, 0)
 
-  const footL = createPart(new THREE.BoxGeometry(0.30, 0.14, 0.32), 0x1b1b1b)
-  footL.position.set(0, -0.26, 0.12)
+  const legR = createPart(new THREE.BoxGeometry(0.26, 0.50, 0.20), 0x6e6e7a)
+  legR.position.set(0.18, 0.10, 0)
 
-  const footR = createPart(new THREE.BoxGeometry(0.30, 0.14, 0.32), 0x1b1b1b)
-  footR.position.set(0, -0.26, 0.12)
+  const footL = createPart(new THREE.BoxGeometry(0.30, 0.20, 0.32), 0x1b1b1b)
+  footL.position.set(0, -0.32, 0.06)
+
+  const footR = createPart(new THREE.BoxGeometry(0.30, 0.20, 0.32), 0x1b1b1b)
+  footR.position.set(0, -0.32, 0.06)
 
   legL.add(footL)
   legR.add(footR)
+  legs.add(legL)
+  legs.add(legR)
 
   group.add(head)
   group.add(face)
@@ -214,8 +254,7 @@ export function createAvatar(scene, pubkey) {
   group.add(handL)
   group.add(handR)
   group.add(hips)
-  group.add(legL)
-  group.add(legR)
+  group.add(legs)
 
   group.traverse((o) => {
     if (!o || typeof o !== "object") return
@@ -223,7 +262,7 @@ export function createAvatar(scene, pubkey) {
     o.userData.pubkey = String(pubkey || "")
   })
 
-  group.userData.parts = { head, face, hair, torso, armL, armR, handL, handR, hips, legL, legR, footL, footR }
+  group.userData.parts = { head, face, hair, torso, armL, armR, handL, handR, hips, legs, legL, legR, footL, footR }
   group.userData.pose = "stand"
   group.userData.poseYOffset = 0
   group.userData.appearance = normalizeAppearance(null)
@@ -238,6 +277,7 @@ export function createAvatar(scene, pubkey) {
     handL: { pos: handL.position.clone(), rot: handL.rotation.clone() },
     handR: { pos: handR.position.clone(), rot: handR.rotation.clone() },
     hips: { pos: hips.position.clone(), rot: hips.rotation.clone() },
+    legs: { pos: legs.position.clone(), rot: legs.rotation.clone() },
     legL: { pos: legL.position.clone(), rot: legL.rotation.clone() },
     legR: { pos: legR.position.clone(), rot: legR.rotation.clone() },
     footL: { pos: footL.position.clone(), rot: footL.rotation.clone() },
@@ -278,15 +318,21 @@ export function setAvatarPose(avatar, pose) {
     parts.torso.position.y = 1.02
     parts.hips.position.y = 0.70
 
+    if (parts.legs) {
+      parts.legs.rotation.x = 0
+      parts.legs.position.y = 0.32
+      parts.legs.position.z = 0.22
+    }
+
     if (parts.legL) {
       parts.legL.rotation.x = -Math.PI / 2
-      parts.legL.position.y = 0.50
-      parts.legL.position.z = 0.34
+      parts.legL.position.y = 0.10
+      parts.legL.position.z = 0.18
     }
     if (parts.legR) {
       parts.legR.rotation.x = -Math.PI / 2
-      parts.legR.position.y = 0.50
-      parts.legR.position.z = 0.34
+      parts.legR.position.y = 0.10
+      parts.legR.position.z = 0.18
     }
 
     if (parts.armL) {

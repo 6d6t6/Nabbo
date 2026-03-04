@@ -4276,21 +4276,10 @@ async function init() {
         }
       }
 
-      const wasSittingAtClick = myPose === "sit" && Boolean(sittingOnInstanceId)
-      if (wasSittingAtClick) {
-        pendingSit = null
-        standUpIfSitting()
-      }
-
-      if (!wasSittingAtClick) {
-        const chairId = getChairInstanceAtTile(tile)
-        if (chairId) {
-          const isSameChair = myPose === "sit" && Boolean(sittingOnInstanceId) && String(chairId) === String(sittingOnInstanceId)
-          if (!isSameChair) {
-            if (trySitOnInstance(chairId)) {
-              return
-            }
-          }
+      const chairId = getChairInstanceAtTile(tile)
+      if (chairId) {
+        if (trySitOnInstance(chairId)) {
+          return
         }
       }
 
@@ -4389,6 +4378,7 @@ function animate() {
 
     if (myPose === "sit" && sittingOnInstanceId) {
       applySitTransform(myAvatar, sittingOnInstanceId)
+      myTarget = { x: myAvatar.position.x, z: myAvatar.position.z }
     }
 
     const dx = myTarget.x - myAvatar.position.x
