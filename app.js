@@ -3258,7 +3258,8 @@ function handlePeerState(peer, state) {
         defId: it.defId,
         tile: it.tile,
         rot: it.rot || 0,
-        stackIndex: it.stackIndex || 0
+        stackIndex: it.stackIndex || 0,
+        y: typeof it.y === "number" && Number.isFinite(it.y) ? it.y : undefined
       }))
       if (items.length) {
         net.sendTo(peer, { type: "room_items", items })
