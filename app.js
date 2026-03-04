@@ -16,6 +16,69 @@ let mouse
 
 let avatars = {}
 
+let currentDetails = null
+
+function closeDetailsPanel() {
+  currentDetails = null
+  try {
+    if (detailsPanelEl) detailsPanelEl.style.display = "none"
+    if (detailsBodyEl) detailsBodyEl.innerHTML = ""
+  } catch {}
+}
+
+function setDetailsRow(label, value) {
+  if (!detailsBodyEl) return
+  const row = document.createElement("div")
+  row.className = "details-row"
+  const l = document.createElement("div")
+  l.className = "details-label"
+  l.textContent = label
+  const v = document.createElement("div")
+  v.className = "details-value"
+  v.textContent = value
+  row.appendChild(l)
+  row.appendChild(v)
+  detailsBodyEl.appendChild(row)
+}
+
+function openDetailsPanel(selection) {
+  if (!selection || typeof selection !== "object") return
+  currentDetails = selection
+
+  if (!detailsPanelEl || !detailsBodyEl || !detailsTitleEl) return
+  detailsBodyEl.innerHTML = ""
+
+  const kind = String(selection.kind || "")
+  if (kind === "avatar" || kind === "bot") {
+    const pubkey = String(selection.pubkey || "")
+    const title = getDisplayName(pubkey) || "Avatar"
+    detailsTitleEl.textContent = title
+    setDetailsRow("Type", kind === "bot" ? "Bot" : "Avatar")
+    setDetailsRow("Name", title)
+    setDetailsRow("Id", pubkey ? pubkey.slice(0, 12) + "…" : "")
+    detailsPanelEl.style.display = "block"
+    return
+  }
+
+  if (kind === "furni") {
+    const instanceId = String(selection.instanceId || "")
+    const it = placedItems.get(instanceId)
+    const defId = it?.defId || selection.defId || ""
+    const def = getFurniDef(defId)
+    const title = String(def?.name || selection.name || defId || "Furni")
+    detailsTitleEl.textContent = title
+    setDetailsRow("Type", "Furni")
+    setDetailsRow("Name", title)
+    if (defId) setDetailsRow("Def", String(defId))
+    if (instanceId) setDetailsRow("Instance", String(instanceId).slice(0, 12) + "…")
+    if (it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number") {
+      setDetailsRow("Tile", `${it.tile.x}, ${it.tile.z}`)
+    }
+    detailsPanelEl.style.display = "block"
+    return
+  }
+}
+
 const appearances = {}
 let myAppearance = null
 
@@ -536,7 +599,7 @@ function clampToWalkable(pos) {
   return { x: w.x, z: w.z }
 }
 
-function teardownRoom({ reason = null, showLobby = true } = {}) {
+function teardownRoom({ reason, showLobby = true } = {}) {
   if (reason) appendChatLine(reason)
 
   if (currentRoom?.isHost && currentRoom?.announcePublic) {
@@ -712,6 +775,18 @@ function pickPlacedInstanceFromEvent(e) {
   const hits = raycaster.intersectObject(placedGroup, true)
   const id = hits?.[0]?.object?.userData?.instanceId
   return typeof id === "string" ? id : ""
+}
+
+function pickAvatarPubkeyFromEvent(e) {
+  if (!raycaster || !mouse || !camera) return ""
+  const arr = Object.values(avatars || {})
+  if (!arr.length) return ""
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1
+  raycaster.setFromCamera(mouse, camera)
+  const hits = raycaster.intersectObjects(arr, true)
+  const pk = hits?.[0]?.object?.userData?.pubkey
+  return typeof pk === "string" ? pk : ""
 }
 
 function sendRotateItem(instanceId) {
@@ -1053,6 +1128,11 @@ const joinCode = document.getElementById("joinCode")
 
 const sendBtn = document.getElementById("sendBtn")
 const chatInput = document.getElementById("chatInput")
+
+const detailsPanelEl = document.getElementById("detailsPanel")
+const detailsTitleEl = document.getElementById("detailsTitle")
+const detailsBodyEl = document.getElementById("detailsBody")
+const detailsCloseEl = document.getElementById("detailsClose")
 
 const dockNavigator = document.getElementById("dockNavigator")
 const dockInventory = document.getElementById("dockInventory")
@@ -3413,6 +3493,10 @@ async function init() {
     }
   }
 
+  if (detailsCloseEl) {
+    detailsCloseEl.onclick = () => closeDetailsPanel()
+  }
+
   chatInput.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return
     if (e.shiftKey) return
@@ -3612,6 +3696,7 @@ async function init() {
       if (t.closest(".dock")) return
       if (t.closest("#ui")) return
       if (t.closest(".chatlog")) return
+      if (t.closest(".details-panel")) return
     }
 
     if (!isPlacing) {
@@ -3625,6 +3710,19 @@ async function init() {
           sendPickupItem(id)
           return
         }
+      }
+    }
+
+    if (!isPlacing && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const pk = pickAvatarPubkeyFromEvent(e)
+      if (pk) {
+        openDetailsPanel({ kind: "avatar", pubkey: pk })
+        return
+      }
+      const fid = pickPlacedInstanceFromEvent(e)
+      if (fid) {
+        openDetailsPanel({ kind: "furni", instanceId: fid })
+        return
       }
     }
 

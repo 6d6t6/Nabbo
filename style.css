@@ -285,6 +285,72 @@ select {
   -webkit-overflow-scrolling: touch;
 }
 
+.details-panel {
+  position: absolute;
+  right: 10px;
+  bottom: 118px;
+  width: 260px;
+  max-height: 35vh;
+  overflow: hidden;
+  padding: 10px;
+  background: rgba(20, 22, 26, 0.74);
+  color: #e6e6e6;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 13px;
+  display: none;
+  z-index: 6;
+  -webkit-overflow-scrolling: touch;
+}
+
+.details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.details-title {
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.details-close {
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.details-close:hover {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.details-body {
+  overflow: auto;
+  max-height: calc(35vh - 44px);
+}
+
+.details-row {
+  margin-bottom: 6px;
+}
+
+.details-label {
+  opacity: 0.75;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.details-value {
+  font-size: 13px;
+  word-break: break-word;
+}
+
 .shop-layout {
   display: grid;
   grid-template-columns: 120px 1fr;

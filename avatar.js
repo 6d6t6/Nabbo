@@ -111,6 +111,8 @@ function createPart(geo, color) {
 export function createAvatar(scene, pubkey) {
   const group = new THREE.Group()
 
+  group.userData.pubkey = String(pubkey || "")
+
   const baseColor = pubkey ? colorFromString(pubkey) : Math.random() * 0xffffff
   group.userData.baseColor = baseColor
 
@@ -139,6 +141,12 @@ export function createAvatar(scene, pubkey) {
   group.add(torso)
   group.add(hips)
   group.add(legs)
+
+  group.traverse((o) => {
+    if (!o || typeof o !== "object") return
+    o.userData = o.userData || {}
+    o.userData.pubkey = String(pubkey || "")
+  })
 
   group.userData.parts = { head, face, hair, torso, hips, legs }
   group.userData.pose = "stand"
