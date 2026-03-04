@@ -856,7 +856,7 @@ function removePlacedLocal(instanceId) {
   }
 }
 
-function updatePlacedLocal({ instanceId, tile, rot, stackIndex }) {
+function updatePlacedLocal({ instanceId, tile, rot, stackIndex, y }) {
   const existing = placedItems.get(instanceId)
   if (!existing) return
   const next = { ...existing }
@@ -876,13 +876,25 @@ function updatePlacedLocal({ instanceId, tile, rot, stackIndex }) {
 
     next.stackIndex = nextStackIndex
 
+    if (typeof stackIndex === "number" && Number.isFinite(stackIndex)) {
+      next.stackIndex = Math.max(0, Math.floor(stackIndex))
+    }
+
+    if (typeof y === "number" && Number.isFinite(y)) {
+      next.y = y
+    } else {
+      const movedDefId = existing.defId
+      next.y = computePlacementY(tile, movedDefId)
+    }
+
     if (floor?.userData?.tileToWorld && existing.mesh) {
       const w = floor.userData.tileToWorld(tile.x, tile.z)
       existing.mesh.position.x = w.x
       existing.mesh.position.z = w.z
 
-      const baseY = canStack ? getStackBaseY(tile, nextStackIndex) : getTileBaseY(tile)
-      existing.mesh.position.y = baseY
+      if (typeof next.y === "number" && Number.isFinite(next.y)) {
+        existing.mesh.position.y = next.y
+      }
     }
   }
   if (typeof rot === "number" && Number.isFinite(rot)) {
@@ -896,6 +908,7 @@ function updatePlacedLocal({ instanceId, tile, rot, stackIndex }) {
     if (tile) payload.tile = tile
     if (typeof rot === "number") payload.rot = rot
     if (tile) payload.stackIndex = next.stackIndex
+    if (typeof next.y === "number" && Number.isFinite(next.y)) payload.y = next.y
     queueItemLocationPublish(instanceId, payload)
   }
   if (currentRoom?.isHost && !loadingRoomState) {
@@ -934,6 +947,7 @@ async function flushItemLocationPublishes() {
       if (patch.tile) obj.tile = patch.tile
       if (typeof patch.rot === "number") obj.rot = patch.rot
       if (typeof patch.stackIndex === "number") obj.stackIndex = patch.stackIndex
+      if (typeof patch.y === "number") obj.y = patch.y
     }
     const tags = [
       ["t", "nabbo-item-loc"],
@@ -1008,9 +1022,10 @@ function sendMoveItem(instanceId, tile) {
   }
 
   const stackIndex = def?.stackable ? (occupiedByOther ? getStackIndexForTileExcluding(tile, instanceId) : 0) : 0
+  const y = computePlacementY(tile, it?.defId)
   if (currentRoom?.isHost) {
     updatePlacedLocal({ instanceId, tile, stackIndex })
-    net.broadcast({ type: "item_moved", item: { instanceId, tile, stackIndex } })
+    net.broadcast({ type: "item_moved", item: { instanceId, tile, stackIndex, y } })
   } else {
     net.broadcast({ type: "move_item", item: { instanceId, tile } })
   }
@@ -1157,9 +1172,8 @@ function placeItemLocal(item) {
   mesh.rotation.y = rot * (Math.PI / 2)
   const stackIndex = Number(item.stackIndex || 0) || 0
   const def = getFurniDef(item.defId)
-  const step = getItemStackStep(item.defId)
-  const baseY = def?.stackable ? getStackBaseY(item.tile, stackIndex) : getTileBaseY(item.tile)
-  mesh.position.y = baseY
+  const y = typeof item.y === "number" && Number.isFinite(item.y) ? item.y : computePlacementY(item.tile, item.defId)
+  mesh.position.y = y
 
   mesh.traverse((o) => {
     if (o && typeof o === "object") {
@@ -1170,7 +1184,7 @@ function placeItemLocal(item) {
 
   placedGroup.add(mesh)
 
-  placedItems.set(item.instanceId, { ...item, rot, stackIndex, mesh })
+  placedItems.set(item.instanceId, { ...item, rot, stackIndex, y, mesh })
   rebuildBlockedTiles()
   renderInventory()
 
@@ -1181,7 +1195,8 @@ function placeItemLocal(item) {
         roomId: currentRoom.roomId,
         tile: item.tile,
         rot,
-        stackIndex
+        stackIndex,
+        y
       })
     }
   }
@@ -1219,7 +1234,8 @@ async function saveRoomFurni() {
     defId: it.defId,
     tile: it.tile,
     rot: it.rot || 0,
-    stackIndex: it.stackIndex || 0
+    stackIndex: it.stackIndex || 0,
+    y: typeof it.y === "number" && Number.isFinite(it.y) ? it.y : undefined
   }))
   const contentObj = {
     type: "nabbo_room_state",
@@ -1251,7 +1267,14 @@ async function loadRoomFurni(roomId) {
   if (!Array.isArray(obj.items)) return []
   return obj.items
     .filter((it) => it?.instanceId && it?.defId && it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number")
-    .map((it) => ({ instanceId: it.instanceId, defId: it.defId, tile: it.tile, rot: it.rot || 0, stackIndex: it.stackIndex || 0 }))
+    .map((it) => ({
+      instanceId: it.instanceId,
+      defId: it.defId,
+      tile: it.tile,
+      rot: it.rot || 0,
+      stackIndex: it.stackIndex || 0,
+      y: typeof it.y === "number" && Number.isFinite(it.y) ? it.y : undefined
+    }))
 }
 
 const win = createWindowManager({ initialZ: 50, bottomMargin: 70 })
@@ -1569,6 +1592,23 @@ function getStackBaseY(tile, stackIndex) {
   return y
 }
 
+function computePlacementY(tile, defId) {
+  const def = getFurniDef(defId)
+  const baseY = getTileBaseY(tile)
+  if (!def?.stackable) return baseY
+
+  let y = baseY
+  for (const it of placedItems.values()) {
+    if (!it?.tile) continue
+    if (it.tile.x !== tile.x || it.tile.z !== tile.z) continue
+    const itY = typeof it.y === "number" && Number.isFinite(it.y) ? it.y : it.mesh?.position?.y
+    if (typeof itY !== "number" || !Number.isFinite(itY)) continue
+    const top = itY + getItemStackStep(it.defId)
+    if (top > y) y = top
+  }
+  return y
+}
+
 function rebuildBlockedTiles() {
   const next = new Set()
   for (const it of placedItems.values()) {
@@ -1592,43 +1632,25 @@ function rebuildBlockedTiles() {
   }
   floorBaseYByKey = base
 
-  const itemsByTile = new Map()
-  for (const it of placedItems.values()) {
-    if (!it?.tile) continue
-    const k = tileKey(it.tile.x, it.tile.z)
-    const arr = itemsByTile.get(k) || []
-    arr.push(it)
-    itemsByTile.set(k, arr)
-  }
-
   const surface = new Map()
   for (const [k, y] of base.entries()) surface.set(k, y)
 
-  for (const [k, arr] of itemsByTile.entries()) {
+  for (const it of placedItems.values()) {
+    if (!it?.tile) continue
+    const def = getFurniDef(it.defId)
+    if (def?.blocksMovement !== false) continue
+    const k = tileKey(it.tile.x, it.tile.z)
     const by = base.get(k) ?? 0
-    const sorted = arr
-      .map((it) => ({ it, si: Number(it.stackIndex || 0) || 0 }))
-      .sort((a, b) => a.si - b.si)
 
-    let y = by
-    for (const { it } of sorted) {
-      const def = getFurniDef(it.defId)
-      const step = getItemStackStep(it.defId)
-      const h = Number(def?.height || step)
-      const height = Number.isFinite(h) && h > 0 ? h : step
+    const step = getItemStackStep(it.defId)
+    const h = Number(def?.height || step)
+    const height = Number.isFinite(h) && h > 0 ? h : step
+    const itY = typeof it.y === "number" && Number.isFinite(it.y) ? it.y : it.mesh?.position?.y
+    if (typeof itY !== "number" || !Number.isFinite(itY)) continue
 
-      if (it?.mesh?.position) {
-        it.mesh.position.y = y
-      }
-
-      if (def?.blocksMovement === false) {
-        const top = y + height
-        const prev = surface.get(k) ?? by
-        if (top > prev) surface.set(k, top)
-      }
-
-      y += step
-    }
+    const top = itY + height
+    const prev = surface.get(k) ?? by
+    if (top > prev) surface.set(k, top)
   }
 
   walkSurfaceYByKey = surface
@@ -1891,7 +1913,8 @@ function tryPlaceSelectedAtTile(tile) {
   if (occupied && !def?.stackable) return false
   const stackIndex = def?.stackable ? getStackIndexForTile(tile) : 0
 
-  const item = { instanceId: selectedInstanceId, defId: inv.defId, tile: { x: tile.x, z: tile.z }, rot: 0, stackIndex }
+  const y = computePlacementY(tile, inv.defId)
+  const item = { instanceId: selectedInstanceId, defId: inv.defId, tile: { x: tile.x, z: tile.z }, rot: 0, stackIndex, y }
   if (currentRoom?.isHost) {
     placeItemLocal(item)
     net.broadcast({ type: "item_placed", item })
@@ -3174,7 +3197,7 @@ function handleNetMessage(fromPubkey, msg) {
   if (msg.type === "item_moved" && msg.item) {
     const it = msg.item
     if (it?.instanceId && it?.tile && typeof it.tile.x === "number" && typeof it.tile.z === "number") {
-      updatePlacedLocal({ instanceId: it.instanceId, tile: it.tile, stackIndex: it.stackIndex })
+      updatePlacedLocal({ instanceId: it.instanceId, tile: it.tile, stackIndex: it.stackIndex, y: it.y })
     }
     return
   }
