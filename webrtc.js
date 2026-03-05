@@ -57,7 +57,7 @@ export class NabboNet {
 
     this._seenSignalEventIds = new Set()
 
-    this._signalSince = nowSec() - 5
+    this._signalSince = nowSec() - 120
 
     this.sessionId = createSessionId()
     this.peerSessions = new Map()
@@ -189,9 +189,6 @@ export class NabboNet {
     }
 
     const msgTs = typeof msg.ts === "number" ? msg.ts : 0
-    if (msgTs && msgTs < this._signalSince) {
-      return
-    }
 
     if (this.isHost) {
       if (msg.type === "join") {
