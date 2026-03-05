@@ -5,6 +5,7 @@ import { createAvatar, updateAvatarPosition, setAvatarPose, setAvatarAppearance,
 import { NabboNet, createRoomId, roomIdToCode } from "./webrtc.js"
 import { createWindowManager } from "./ui/windowManager.js"
 import { createDisconnectModal } from "./ui/disconnectModal.js"
+import { createConnectingModal } from "./ui/connectingModal.js"
 import { createPublicRooms } from "./lobby/publicRooms.js"
 
 let scene, camera, renderer
@@ -1289,6 +1290,7 @@ async function loadRoomFurni(roomId) {
 
 const win = createWindowManager({ initialZ: 50, bottomMargin: 70 })
 const disconnectModal = createDisconnectModal({ win })
+const connectingModal = createConnectingModal({ win })
 let remoteTargets = {}
 
 let myPubkey
@@ -1305,6 +1307,10 @@ let pendingSit = null
 let myPath = null
 
 let lastAnimAt = 0
+
+let joinConnecting = false
+let joinGotSnapshot = false
+let joinConnectTimeout = null
 
 let roomAnnounceInterval = null
 
@@ -3115,6 +3121,15 @@ function handleNetMessage(fromPubkey, msg) {
   }
 
   if (msg.type === "snapshot" && Array.isArray(msg.players)) {
+    if (joinConnecting) {
+      joinGotSnapshot = true
+      joinConnecting = false
+      if (joinConnectTimeout) {
+        clearTimeout(joinConnectTimeout)
+        joinConnectTimeout = null
+      }
+      connectingModal.hide()
+    }
     for (const p of msg.players) {
       if (!p?.pubkey || !p?.pos) continue
       if (p.pubkey === myPubkey) continue
@@ -3251,6 +3266,10 @@ function handlePeerState(peer, state) {
   if (state === "open") {
     appendChatLine(`connected: ${peer.slice(0, 8)}...`)
 
+    if (currentRoom && !currentRoom.isHost && peer === currentRoom.ownerPubkey && joinConnecting && !joinGotSnapshot) {
+      connectingModal.show({ title: "Connecting…", body: "Connected to host. Syncing room…" })
+    }
+
     ensureAvatar(peer)
 
     if (!net || !currentRoom) return
@@ -3305,6 +3324,20 @@ function handlePeerState(peer, state) {
   } else if (state === "failed" || state === "disconnected" || state === "closed") {
     appendChatLine(`connection ${state}: ${peer.slice(0, 8)}...`)
 
+    if (joinConnecting && currentRoom && !currentRoom.isHost && peer === currentRoom.ownerPubkey) {
+      joinConnecting = false
+      joinGotSnapshot = false
+      if (joinConnectTimeout) {
+        clearTimeout(joinConnectTimeout)
+        joinConnectTimeout = null
+      }
+      connectingModal.hide()
+      disconnectModal.show({
+        title: "Connection failed",
+        body: `Could not connect to the host (${state}). Make sure both of you are online and try again.`
+      })
+    }
+
     if (Date.now() < suppressDisconnectUntil) {
       return
     }
@@ -3341,6 +3374,14 @@ async function startRoom({ roomId, code, name, plan, door, entryDir, ownerPubkey
   appendChatLine(`room: ${code} (${roomId.slice(0, 8)}...)`)
   appendChatLine(isHost ? "you are the host" : `host: ${ownerPubkey.slice(0, 8)}...`)
 
+  joinConnecting = false
+  joinGotSnapshot = false
+  if (joinConnectTimeout) {
+    clearTimeout(joinConnectTimeout)
+    joinConnectTimeout = null
+  }
+  connectingModal.hide()
+
   for (const k of Object.keys(avatars)) {
     scene.remove(avatars[k])
     delete avatars[k]
@@ -3357,6 +3398,19 @@ async function startRoom({ roomId, code, name, plan, door, entryDir, ownerPubkey
     }
   } else {
     stopRoomAnnouncements()
+
+    joinConnecting = true
+    joinGotSnapshot = false
+    connectingModal.show({ title: "Connecting…", body: "Contacting host…" })
+    joinConnectTimeout = setTimeout(() => {
+      if (!joinConnecting || joinGotSnapshot) return
+      joinConnecting = false
+      connectingModal.hide()
+      disconnectModal.show({
+        title: "Connection timed out",
+        body: "Could not reach the host. The room may be closed, the host may be offline, or signaling is blocked. Try again in a moment."
+      })
+    }, 15000)
   }
 
   const effectivePlan = plan || currentFloorPlan || getDefaultPlanCode()
