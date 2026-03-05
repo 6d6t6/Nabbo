@@ -1311,6 +1311,30 @@ let lastAnimAt = 0
 let joinConnecting = false
 let joinGotSnapshot = false
 let joinConnectTimeout = null
+let joinDiag = null
+let joinRetryInterval = null
+
+function formatJoinDiagnostics() {
+  if (!joinDiag) return ""
+  const ageMs = Date.now() - (joinDiag.startedAt || Date.now())
+  const lastAgeMs = joinDiag.lastMsgAt ? Date.now() - joinDiag.lastMsgAt : 0
+  const host = String(joinDiag.host || "")
+  const hostShort = host ? `${host.slice(0, 8)}…` : ""
+  return [
+    `roomId: ${joinDiag.roomId || ""}`,
+    `host: ${hostShort}`,
+    `elapsedMs: ${Math.max(0, ageMs)}`,
+    `peerState: ${joinDiag.peerState || ""}`,
+    `dataChannelOpen: ${joinDiag.dataChannelOpen ? "yes" : "no"}`,
+    `sentJoinCount: ${Number(joinDiag.sentJoinCount || 0)}`,
+    `lastMsgType: ${joinDiag.lastMsgType || ""}`,
+    `lastMsgAgoMs: ${joinDiag.lastMsgAt ? Math.max(0, lastAgeMs) : ""}`,
+    `gotSnapshot: ${joinDiag.gotSnapshot ? "yes" : "no"}`,
+    joinDiag.timedOut ? "timedOut: yes" : ""
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
 
 let roomAnnounceInterval = null
 
@@ -3097,6 +3121,13 @@ function setRemoteTargetTile(pubkey, tile) {
 function handleNetMessage(fromPubkey, msg) {
   if (!msg || typeof msg !== "object") return
 
+  if (joinDiag && joinConnecting && currentRoom && !currentRoom.isHost && fromPubkey === currentRoom.ownerPubkey) {
+    joinDiag.lastMsgType = String(msg.type || "")
+    joinDiag.lastMsgAt = Date.now()
+    if (msg.type === "snapshot") joinDiag.gotSnapshot = true
+    if (typeof connectingModal?.setDiagnostics === "function") connectingModal.setDiagnostics(formatJoinDiagnostics())
+  }
+
   if (fromPubkey) requestNostrProfile(fromPubkey)
 
   if (msg.type === "typing") {
@@ -3267,7 +3298,12 @@ function handlePeerState(peer, state) {
     appendChatLine(`connected: ${peer.slice(0, 8)}...`)
 
     if (currentRoom && !currentRoom.isHost && peer === currentRoom.ownerPubkey && joinConnecting && !joinGotSnapshot) {
+      if (joinDiag) {
+        joinDiag.peerState = "open"
+        joinDiag.dataChannelOpen = true
+      }
       connectingModal.show({ title: "Connecting…", body: "Connected to host. Syncing room…" })
+      if (typeof connectingModal?.setDiagnostics === "function") connectingModal.setDiagnostics(formatJoinDiagnostics())
     }
 
     ensureAvatar(peer)
@@ -3331,6 +3367,10 @@ function handlePeerState(peer, state) {
         clearTimeout(joinConnectTimeout)
         joinConnectTimeout = null
       }
+      if (joinRetryInterval) {
+        clearInterval(joinRetryInterval)
+        joinRetryInterval = null
+      }
       connectingModal.hide()
       disconnectModal.show({
         title: "Connection failed",
@@ -3354,6 +3394,11 @@ function handlePeerState(peer, state) {
     if (remoteTargets[peer]) {
       delete remoteTargets[peer]
     }
+  }
+
+  if (currentRoom && !currentRoom.isHost && peer === currentRoom.ownerPubkey && joinDiag) {
+    joinDiag.peerState = String(state || "")
+    if (typeof connectingModal?.setDiagnostics === "function") connectingModal.setDiagnostics(formatJoinDiagnostics())
   }
 }
 
@@ -3380,6 +3425,11 @@ async function startRoom({ roomId, code, name, plan, door, entryDir, ownerPubkey
     clearTimeout(joinConnectTimeout)
     joinConnectTimeout = null
   }
+  if (joinRetryInterval) {
+    clearInterval(joinRetryInterval)
+    joinRetryInterval = null
+  }
+  joinDiag = null
   connectingModal.hide()
 
   for (const k of Object.keys(avatars)) {
@@ -3401,16 +3451,56 @@ async function startRoom({ roomId, code, name, plan, door, entryDir, ownerPubkey
 
     joinConnecting = true
     joinGotSnapshot = false
+    joinDiag = {
+      roomId: String(roomId || ""),
+      host: String(ownerPubkey || ""),
+      startedAt: Date.now(),
+      sentJoinCount: 0,
+      peerState: "",
+      dataChannelOpen: false,
+      gotSnapshot: false,
+      lastMsgType: "",
+      lastMsgAt: 0
+    }
     connectingModal.show({ title: "Connecting…", body: "Contacting host…" })
+    if (typeof connectingModal?.setDiagnostics === "function") connectingModal.setDiagnostics(formatJoinDiagnostics())
     joinConnectTimeout = setTimeout(() => {
       if (!joinConnecting || joinGotSnapshot) return
       joinConnecting = false
       connectingModal.hide()
-      disconnectModal.show({
-        title: "Connection timed out",
-        body: "Could not reach the host. The room may be closed, the host may be offline, or signaling is blocked. Try again in a moment."
-      })
+      if (joinRetryInterval) {
+        clearInterval(joinRetryInterval)
+        joinRetryInterval = null
+      }
+      if (joinDiag) {
+        joinDiag.timedOut = true
+      }
+      if (typeof connectingModal?.showError === "function") {
+        connectingModal.showError({
+          title: "Connection timed out",
+          body: "Could not reach the host. Ask the host to keep the room open, and try again. If it keeps failing, use Copy diagnostics and send it to the host."
+        })
+        if (typeof connectingModal?.setDiagnostics === "function") connectingModal.setDiagnostics(formatJoinDiagnostics())
+      } else {
+        disconnectModal.show({
+          title: "Connection timed out",
+          body: "Could not reach the host. The room may be closed, the host may be offline, or signaling is blocked. Try again in a moment."
+        })
+      }
     }, 15000)
+
+    joinRetryInterval = setInterval(() => {
+      if (!joinConnecting || joinGotSnapshot || !net || !currentRoom || currentRoom.isHost) return
+      if (!joinDiag) return
+      if (joinDiag.sentJoinCount >= 8) return
+      try {
+        if (typeof net._sendSignal === "function") {
+          joinDiag.sentJoinCount++
+          net._sendSignal({ type: "join", sessionId: net.sessionId })
+          if (typeof connectingModal?.setDiagnostics === "function") connectingModal.setDiagnostics(formatJoinDiagnostics())
+        }
+      } catch {}
+    }, 2000)
   }
 
   const effectivePlan = plan || currentFloorPlan || getDefaultPlanCode()
