@@ -193,17 +193,22 @@ export class NabboNet {
       if (msg.type === "join") {
         this.onPeerState?.(msg.from, "join")
         const prev = this.peerSessions.get(msg.from)
-        if (prev?.sessionId === msg.sessionId && this.peers.has(msg.from)) {
-          this._log("host ignore join (same session)", msg.from?.slice?.(0, 8))
-          return
-        }
-
         if (prev?.ts && msgTs && msgTs < prev.ts) {
           this._log("host ignore join (stale)", msg.from?.slice?.(0, 8))
           return
         }
 
+        const isSameSession = prev?.sessionId === msg.sessionId
+        const pc = this.peers.get(msg.from)
+        const isConnected = pc?.connectionState === "connected"
+
         this.peerSessions.set(msg.from, { sessionId: msg.sessionId, ts: msgTs || nowSec() })
+
+        if (isSameSession && pc && isConnected) {
+          this._log("host ignore join (already connected)", msg.from?.slice?.(0, 8))
+          return
+        }
+
         await this._hostCreatePeer(msg.from, msg.sessionId)
       } else if (msg.type === "answer") {
         const expected = this.peerSessions.get(msg.from)
