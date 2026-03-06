@@ -18,7 +18,10 @@ let usingExtension = false
 const relays = [
   "wss://relay.damus.io",
   "wss://nos.lol",
-  "wss://relay.primal.net"
+  "wss://relay.primal.net",
+  "wss://relay.nostr.band",
+  "wss://relay.snort.social",
+  "wss://nostr.wine"
 ]
 const pool = new SimplePool()
 

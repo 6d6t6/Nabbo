@@ -56,8 +56,7 @@ export class NabboNet {
     this.signalSub = null
 
     this._seenSignalEventIds = new Set()
-
-    this._signalSince = nowSec() - 120
+    this._signalSince = nowSec() - 24 * 60 * 60
 
     this.sessionId = createSessionId()
     this.peerSessions = new Map()
@@ -192,6 +191,7 @@ export class NabboNet {
 
     if (this.isHost) {
       if (msg.type === "join") {
+        this.onPeerState?.(msg.from, "join")
         const prev = this.peerSessions.get(msg.from)
         if (prev?.sessionId === msg.sessionId && this.peers.has(msg.from)) {
           this._log("host ignore join (same session)", msg.from?.slice?.(0, 8))

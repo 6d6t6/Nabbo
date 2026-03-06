@@ -549,69 +549,131 @@ function renderCatalog() {
     card.onclick = () => {
       selectedCatalogDefId = it.defId
       renderCatalog()
+      renderShopPreview()
     }
-
-    const btn = document.createElement("button")
-    btn.className = "primary"
-    btn.textContent = "Buy"
-    btn.type = "button"
-    const price = Number(it.price || 0)
-    if (typeof coinsBalance === "number" && Number.isFinite(coinsBalance)) {
-      btn.disabled = coinsBalance < price
-    } else {
-      btn.disabled = true
-    }
-    btn.onclick = async () => {
-      try {
-        const url = new URL("/api/economy/mint", window.location.origin).toString()
-        const auth = await getNip98AuthHeader(url, "POST")
-
-        const priceNum = Number(it.price || 0)
-        const hadBalance = typeof coinsBalance === "number" && Number.isFinite(coinsBalance)
-        const optimisticAfter = hadBalance ? Math.max(0, coinsBalance - priceNum) : null
-
-        const res = await fetch(url, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            Authorization: auth
-          },
-          body: JSON.stringify({ defId: it.defId, toPubkey: myPubkey })
-        })
-        const out = await res.json().catch(() => null)
-        if (!out?.ok) {
-          appendChatLine(`mint failed: ${out?.error || res.status}`)
-          return
-        }
-
-        if (optimisticAfter != null) {
-          coinsBalance = optimisticAfter
-          saveCachedCoins()
-          renderCoins()
-          renderCatalog()
-        }
-
-        if (typeof out?.balance?.after === "number" && Number.isFinite(out.balance.after) && out.balance.after >= 0) {
-          // Avoid overwriting an optimistic balance with a likely-incomplete computed snapshot.
-          if (optimisticAfter == null || Math.abs(out.balance.after - optimisticAfter) <= 0.0001) {
-            coinsBalance = out.balance.after
-            saveCachedCoins()
-            renderCoins()
-            renderCatalog()
-          }
-        }
-
-        appendChatLine(`bought: ${getFurniDef(it.defId)?.displayName || it.name}`)
-        await new Promise((r) => setTimeout(r, 600))
-        refreshInventory()
-        refreshCoins()
-      } catch (e) {
-        appendChatLine("mint failed")
-      }
-    }
-    card.appendChild(btn)
     catalogEl.appendChild(card)
   }
+}
+
+async function buyCatalogDef(defId) {
+  const it = catalog.find((x) => String(x.defId) === String(defId))
+  if (!it || !myPubkey) return
+  try {
+    const url = new URL("/api/economy/mint", window.location.origin).toString()
+    const auth = await getNip98AuthHeader(url, "POST")
+
+    const priceNum = Number(it.price || 0)
+    const hadBalance = typeof coinsBalance === "number" && Number.isFinite(coinsBalance)
+    const optimisticAfter = hadBalance ? Math.max(0, coinsBalance - priceNum) : null
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: auth
+      },
+      body: JSON.stringify({ defId: it.defId, toPubkey: myPubkey })
+    })
+    const out = await res.json().catch(() => null)
+    if (!out?.ok) {
+      appendChatLine(`mint failed: ${out?.error || res.status}`)
+      return
+    }
+
+    if (optimisticAfter != null) {
+      coinsBalance = optimisticAfter
+      saveCachedCoins()
+      renderCoins()
+    }
+
+    if (typeof out?.balance?.after === "number" && Number.isFinite(out.balance.after) && out.balance.after >= 0) {
+      if (optimisticAfter == null || Math.abs(out.balance.after - optimisticAfter) <= 0.0001) {
+        coinsBalance = out.balance.after
+        saveCachedCoins()
+        renderCoins()
+      }
+    }
+
+    renderCatalog()
+    renderShopPreview()
+
+    appendChatLine(`bought: ${getFurniDef(it.defId)?.displayName || it.name}`)
+    await new Promise((r) => setTimeout(r, 600))
+    refreshInventory()
+    refreshCoins()
+  } catch (e) {
+    appendChatLine("mint failed")
+  }
+}
+
+function renderShopPreview() {
+  if (!shopPreviewEl) return
+  shopPreviewEl.innerHTML = ""
+
+  const selectedCat = String(selectedShopCategory || "All").trim() || "All"
+  const selectedDefId = String(selectedCatalogDefId || "")
+  const it = selectedDefId ? catalog.find((x) => String(x.defId) === selectedDefId) : null
+
+  if (!it) {
+    const title = document.createElement("div")
+    title.className = "shop-preview-title"
+    title.textContent = selectedCat
+
+    const sub = document.createElement("div")
+    sub.className = "shop-preview-sub"
+
+    const visible = catalog.filter((x) => selectedCat === "All" || (x.category || "Other") === selectedCat)
+    sub.textContent = `${visible.length} item${visible.length === 1 ? "" : "s"}`
+
+    shopPreviewEl.appendChild(title)
+    shopPreviewEl.appendChild(sub)
+    return
+  }
+
+  const hero = document.createElement("div")
+  hero.className = "shop-preview-hero"
+
+  const thumb = document.createElement("div")
+  thumb.className = "shop-preview-thumb"
+  thumb.appendChild(makeThumbEl(it.defId))
+  hero.appendChild(thumb)
+
+  const text = document.createElement("div")
+
+  const title = document.createElement("div")
+  title.className = "shop-preview-title"
+  title.textContent = getFurniDef(it.defId)?.displayName || it.name
+  text.appendChild(title)
+
+  const sub = document.createElement("div")
+  sub.className = "shop-preview-sub"
+  sub.textContent = `${it.price} coins`
+  text.appendChild(sub)
+
+  hero.appendChild(text)
+  shopPreviewEl.appendChild(hero)
+
+  const actions = document.createElement("div")
+  actions.className = "shop-preview-actions"
+
+  const btn = document.createElement("button")
+  btn.className = "primary"
+  btn.type = "button"
+  btn.textContent = "Buy"
+
+  const price = Number(it.price || 0)
+  if (typeof coinsBalance === "number" && Number.isFinite(coinsBalance)) {
+    btn.disabled = coinsBalance < price
+  } else {
+    btn.disabled = true
+  }
+
+  btn.onclick = async () => {
+    await buyCatalogDef(it.defId)
+  }
+
+  actions.appendChild(btn)
+  shopPreviewEl.appendChild(actions)
 }
 
 function renderInventory() {
@@ -1416,6 +1478,7 @@ const inventoryCancelPlaceEl = document.getElementById("inventoryCancelPlace")
 const coinBalanceEl = document.getElementById("coinBalance")
 const claimCoinsEl = document.getElementById("claimCoins")
 const shopCategoriesEl = document.getElementById("shopCategories")
+const shopPreviewEl = document.getElementById("shopPreview")
 const profileEl = document.getElementById("profile")
 const profileNameEl = document.getElementById("profileName")
 const profileSaveEl = document.getElementById("profileSave")
@@ -1935,8 +1998,10 @@ function ensureShopCategories() {
     btn.classList.toggle("selected", String(selectedShopCategory) === String(c))
     btn.onclick = () => {
       selectedShopCategory = c
+      selectedCatalogDefId = ""
       ensureShopCategories()
       renderCatalog()
+      renderShopPreview()
     }
     shopCategoriesEl.appendChild(btn)
   }
@@ -3294,6 +3359,10 @@ function handleNetMessage(fromPubkey, msg) {
 }
 
 function handlePeerState(peer, state) {
+  if (state === "join") {
+    appendChatLine(`join request: ${peer.slice(0, 8)}...`)
+    return
+  }
   if (state === "open") {
     appendChatLine(`connected: ${peer.slice(0, 8)}...`)
 
